@@ -90,7 +90,7 @@ python -m ocr_router.cli process `
 2. Prints a full proposal table (original → new name, category, issuer, folder status)
 3. Asks **Move** (target folder) or **Rename in place** (stay in source folder, new name only)
 4. Asks which files to act on (`Enter` = all, `1,3,5` = only those, `skip 2,4` = all except, `q` = quit)
-5. Executes and appends a section to `PROCESSING_HISTORY.md`
+5. Executes and appends a section to `PROCESSED_PDFS.md`
 
 ### Batch Mode (no prompts)
 

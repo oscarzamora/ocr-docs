@@ -43,7 +43,7 @@ data/output/
 data/processed/
 manifest.csv
 manifest.jsonl
-PROCESSING_HISTORY.md
+PROCESSED_PDFS.md
 review-queue.csv
 human-feedback.csv
 learned-rules.json
