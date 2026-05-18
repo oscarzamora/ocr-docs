@@ -1,114 +1,326 @@
 owners:
-  - Default
+  - Ozamo
+  - Giovanna
 
 route_templates:
   default: "{category}/{issuer}/{year}"
   Bills: "Bills/{issuer}/{year}"
   Credit Card Statements: "Credit Card Statements/{issuer}/{year}"
   Bank Account & Statements: "Bank Account & Statements/{issuer}/{year}"
+  HSA & FSA Transactions: "HSA & FSA Transactions/{year}"
   Mortgage & Home Equity Accounts: "Mortgage & Home Equity Accounts/{account}/{year}"
   Health Statements & Results: "Health Statements & Results/{year}"
   Insurance: "Insurance/{year}"
   Tax Returns: "Tax Returns/{year}"
-  Paystubs: "Paystubs/{year}"
-  Receipts: "Receipts/{year}"
   Notices: "Notices/{year}"
+  Personal: "Personal"
+  Paystubs: "Paystubs/{year}"
+  Receipts: "Receipts, Payment, Warranty"
+  Real Estate & HOA: "Weston Hills"
+  Rental Expenses: "Rental/Rental Expenses/{year}"
 
+# Minimum keyword hitsrequired to accept a category classification (prevents false positives)
 min_classification_score: 2
 
+# Categories that produce YYYY.MM filename (no day number)
 monthly_categories:
   - Bills
   - Credit Card Statements
   - Mortgage & Home Equity Accounts
   - Bank Account & Statements
+  - HSA & FSA Transactions
+  - Rental Expenses
 
+# Categories where account # appearsin the filename
 account_in_filename_categories:
+  - Bills
   - Credit Card Statements
   - Mortgage & Home Equity Accounts
 
-# Categories where amount should be excluded from file names.
-no_amount_categories:
-  - Tax Returns
-  - Notices
-
+# Doc type label appended to issuer in the filename smart name
 doc_types:
   Bills: Monthly
   Credit Card Statements: Statement
   Bank Account & Statements: Statement
   Mortgage & Home Equity Accounts: Statement
+  HSA & FSA Transactions: Statement
   Health Statements & Results: EOB
   Insurance: Policy
   Tax Returns: Return
   Notices: Notice
+  Personal: Personal
   Paystubs: Paycheck
   Receipts: Receipt
+  Real Estate & HOA: HOA
+  Rental Expenses: Invoice
 
+# Categories where dollar amount is NOT included in filename
+# (reference documents, forms, guidelines ΓÇö no actual transaction)
+no_amount_categories:
+  - Real Estate & HOA
+
+# Known issuers:
+# Longer keys are checked first (more specific wins over shorter alias).
+# NOTE: & and - are removed during normalization (AT&TΓåÆatt, T-MobileΓåÆtmobile),
+# so keys here can use either form.
 known_issuers:
+  # Health insurance (longer/specific keys before short abbreviations)
+  unitedhealth: UnitedHealthcare
+  united health: UnitedHealthcare
+  blue cross blue shield: BlueCross BlueShield
+  blue cross: BlueCross BlueShield
+  deltadental: Delta Dental
+  delta dental: Delta Dental
+  premera: Premera
+  cigna: Cigna
+  aetna: Aetna
+  humana: Humana
+  # HOA / Real Estate
+  weston hills community association: Weston Hills Community Association
+  boca rio homeowners: Boca Rio Homeowners Association
+  north hills: Weston Hills Community Association
+  weston hills: Weston Hills Community Association
+  # Retailers / Order confirmations (check before product brands)
+  contactsdirect: ContactsDirect
+  contacts direct: ContactsDirect
+  bhphotovideo: B&H Photo
+  bh photo: B&H Photo
+  amazon.com: Amazon
+  bestbuy: Best Buy
+  best buy: Best Buy
+  walmart: Walmart
+  costco: Costco
+  apple store: Apple Store
+  target: Target
+  # Interbank Peru AMEX cards (check before generic 'amex' and 'interbank')
+  amex centurion gold: AMEX Gold
+  amex centurion: AMEX Gold
+  interbank amex: AMEX Gold
+  # Bills - active accounts
+  florida power and light: FPL
+  florida power & light: FPL
+  nissan motor acceptance: NMAC
+  space coast credit union: Space Coast Credit Union
+  pure water pool service: Pure Water Pool Service
+  pure water pool: Pure Water Pool Service
+  midtown athletic club: Midtown Athletic Club
+  midtown athletic: Midtown Athletic Club
+  sagajon lawn: Sagajon Lawn Services
+  city of sunrise: City of Sunrise
+  t-mobile: T-Mobile
+  tmobile: T-Mobile
+  at&t: AT&T
+  att: AT&T
+  fpl: FPL
+  ionos: IONOS
+  nmac: NMAC
+  sunpass: SunPass
+  # Employers / HR / ID (for badge, identity, employment docs)
+  dtcc: DTCC
+  depository trust: DTCC
   bank of america: Bank of America
-  chase: Chase
-  amex: AMEX
+  capital one: Capital One
+  first citizens: First Citizens
+  bmw financial: BMW Financial
+  discover card: Discover
+  barclaycard: Barclay
+  interbank: Interbank
   citibank: Citibank
+  barclay: Barclay
+  synchrony: Synchrony
+  fidelity: Fidelity
+  amex: AMEX
+  chase: Chase
+  citi: Citibank
+  pnc: PNC
+  macy: Macy's
+  # Banks
   wells fargo: Wells Fargo
-  discover: Discover
+  dade county federal: Dade County Federal CU
+  # Mortgage / HELOC
+  rocket mortgage: Rocket Mortgage
+  pennymac: PennyMac
+  penny mac: PennyMac
+  # Insurance
+  universal property: Universal Property
   allstate: Allstate
-  geico: GEICO
-  adp: ADP
+  amica: Amica
+  # Employers / Payroll processors
+  microsoft: Microsoft
+  automatic data processing: ADP
+  # Equipment / Services
+  canon: Canon
 
 categories:
   Credit Card Statements:
     - credit card
+    - cardmember
+    - new balance
     - statement balance
     - minimum payment due
+    - account summary
+    - payment due date
+    - credit limit
     - available credit
+    # Spanish (Peruvian / AMEX Interbank)
+    - tarjeta de credito
+    - tarjeta de cr├⌐dito
+    - hoja resumen
+    - estado de cuenta
+    - american express
+    - linea de credito
+    - l├¡nea de cr├⌐dito
 
   Bills:
     - amount due
     - billing period
     - service address
     - due date
+    - pay your bill
+    - total charges
+    - account number
+    - your bill
 
   Bank Account & Statements:
     - checking account
     - savings account
+    - available balance
     - beginning balance
     - ending balance
+    - direct deposit
+    - overdraft
+    - account balance
+    - transaction history
 
   Mortgage & Home Equity Accounts:
     - mortgage
-    - loan number
+    - home equity
     - principal
+    - interest
     - escrow
+    - loan number
+    - heloc
+    - property address
+    - unpaid principal
+
+  HSA & FSA Transactions:
+    - health savings account
+    - flexible spending account
+    - eligible expense
+    - reimbursement
+    - hsa balance
+    - fsa balance
 
   Health Statements & Results:
-    - explanation of benefits
+    - patient name
+    - member id
     - claim number
+    - claim paid
+    - explanation of benefits
+    - billed amount
+    - dental
+    - medical claim
     - provider name
+    - date of service
+    - contact lens
+    - contact lenses
+    - prescription
+    - optometrist
+    - optometry
+    - vision
+    - eyeglass
+    - rx details
+    - sphere
+    - cylinder
+    - lens rx
 
   Insurance:
     - policy number
-    - deductible
     - premium
+    - deductible
+    - coverage
+    - insured
+    - policyholder
+    - declaration page
+    - effective date
 
   Tax Returns:
     - form 1040
     - adjusted gross income
+    - federal income tax
+    - state income tax
+    - w-2
+    - employer identification
     - internal revenue service
+    - annual return
+    - department of the treasury
+    - form 5500
 
   Paystubs:
     - earnings statement
     - pay period
+    - gross pay
     - net pay
+    - employee id
+    - federal withholding
+    - medicare
+    - social security
+    - ytd earnings
+
+  Real Estate & HOA:
+    - homeowners association
+    - architectural guidelines
+    - design guidelines
+    - association fees
+    - architectural review
+    - community standards
+    - hoa fees
+    - structural improvements
+    - weston hills
+    - plantation
 
   Receipts:
     - order number
     - order confirmation
+    - thank you for your order
+    - qty
+    - shipping address
+    - tracking number
     - subtotal
 
   Notices:
     - no action required
-    - important notice
-    - informational update
+    - no action is required
+    - this is an update on the claim
+    - badge acknowledgment form
+    - badge acknowledgment
+    - identity verification
+    - acknowledgment form
 
+  Rental Expenses:
+    - pest control
+    - lawn service
+    - landscaping
+    - lawn maintenance
+    - maintenance service
+    - repair service
+    - rental property
+    - service invoice
+    - exterminator
+    - hvac service
+    - hvac maintenance
+    - plumbing service
+    - electrical service
+
+  Personal:
+    - wedding invitation
+    - you are cordially invited
+    - save the date
+    - rsvp
+    - ceremony
+    - reception
+
+# Extraction patterns for metadata
 extraction_patterns:
   date_formats:
     - "%m/%d/%Y"
@@ -116,24 +328,38 @@ extraction_patterns:
     - "%B %d, %Y"
     - "%b %d, %Y"
     - "%Y-%m-%d"
+    - "%d/%m/%Y"
 
+  # Priority-ordered labeled amount patterns (first match with a valid amount wins)
   amount_labels:
-    - total amount due
-    - amount due
-    - total due
-    - statement balance
-    - payment due
-    - net pay
-    - total
+    - "total amount due"
+    - "amount due"
+    - "total due"
+    - "inv total"
+    - "invoice total"
+    - "new balance"
+    - "statement balance"
+    - "balance due"
+    - "payment due"
+    - "net pay"
+    # Spanish (Peruvian / Interbank AMEX)
+    - "monto a pagar"
+    - "saldo total"
+    - "pago minimo"
+    - "cuota minima"
+    - "total a pagar"
+    - "total"
 
   amount_regex: "(?:total|amount|balance|payment)[\\s\\$]*([\\d,\\.]+)"
   account_regex: "(?:account|account #|acct)[#\\s]*([\\d\\-]{4,})"
 
+# OCR Engine settings
 ocr_settings:
   pdf24_path: "C:\\Program Files\\PDF24\\pdf24-Ocr.exe"
   keepOriginal: true
   archiveFolder: "_processed-originals"
 
+# Manifest settings
 manifest:
   csv_path: "manifest.csv"
   jsonl_path: "manifest.jsonl"
