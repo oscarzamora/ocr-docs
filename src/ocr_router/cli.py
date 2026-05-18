@@ -276,30 +276,33 @@ def _print_proposals(proposals: list[Proposal], output_dir: Path) -> None:
         show_lines=True,
         highlight=True,
     )
-    t.add_column("#",            style="dim",    width=3,  no_wrap=True)
-    t.add_column("Original name", style="cyan",  width=30, no_wrap=True)
-    t.add_column("Category",      style="green", width=24, no_wrap=True)
-    t.add_column("Issuer",        style="yellow",width=18, no_wrap=True)
-    t.add_column("New name",      style="white", width=48, no_wrap=True)
-    t.add_column("Folder",        style="blue",  width=10, no_wrap=True)
-    t.add_column("Notes",         style="dim",   width=30)
+    t.add_column("#",             style="dim",     width=3,  no_wrap=True)
+    t.add_column("Original File", style="cyan",    width=30, no_wrap=True)
+    t.add_column("Category",      style="green",   width=24, no_wrap=True)
+    t.add_column("Issuer",        style="yellow",  width=18, no_wrap=True)
+    t.add_column("New Name",      style="white",   width=40, no_wrap=True)
+    t.add_column("Amount",        style="magenta", width=10, no_wrap=True)
+    t.add_column("Destination",   style="blue",    width=35)
 
     for p in proposals:
         issuer   = p.metadata.get('issuer') or '—'
         amount   = p.metadata.get('amount')
         currency = p.metadata.get('currency', '$')
+        amt_str  = f'{currency}{float(amount):.2f}' if amount else '—'
+        try:
+            dest = str(p.dest_dir.relative_to(output_dir))
+        except ValueError:
+            dest = str(p.dest_dir)
         notes    = ', '.join(p.issues) if p.issues else ''
-        if amount and 'no_amount' not in notes:
-            notes = (notes + ', ' if notes else '') + f'{currency}{float(amount):.2f}'
 
         t.add_row(
             str(p.index),
             p.pdf_file.name[:30],
             p.category,
             issuer[:18],
-            p.new_filename[:48],
-            _STATUS_ICON.get(p.folder_status, p.folder_status),
-            notes,
+            p.new_filename[:40],
+            amt_str,
+            dest + (f'  [dim]{notes}[/]' if notes else ''),
         )
 
     console.print(t)
@@ -330,7 +333,7 @@ def _ask_action_mode() -> Optional[str]:
     return 'move'
 
 
-
+def _interactive_confirm(proposals: list[Proposal], config_path: str) -> Optional[set[int]]:
     """Ask which files to move, collect rules for skipped ones.
 
     Returns a set of approved indices, or None if the user quits.
@@ -513,31 +516,28 @@ def _append_history(output_dir: Path, proposals: list[Proposal], run_time: str,
     dest_header = 'Final Path' if action_mode == 'rename' else 'Destination'
     n           = len(proposals)
 
-    # ── Build table rows ────────────────────────────────────────────────────
-    table_lines: list[str] = [
-        f'| # | Original File | Category | Issuer | New Name | Amount | {dest_header} |\n',
-        f'|---|---------------|----------|--------|----------|--------|-{"-"*max(len(dest_header),12)}-|\n',
-    ]
+    # ── Build Markdown table ────────────────────────────────────────────────────
+    headers = ["#", "Original File", "Category", "Issuer", "New Name", "Amount", dest_header]
+    table_lines: list[str] = []
+    table_lines.append('| ' + ' | '.join(headers) + ' |\n')
+    table_lines.append('| ' + ' | '.join('---' for _ in headers) + ' |\n')
 
     for p in proposals:
-        orig     = _md_escape(p.pdf_file.name)
-        new      = _md_escape(p.new_filename)
-        cat      = _md_escape(p.category)
-        issuer   = _md_escape(p.metadata.get('issuer') or '—')
+        issuer   = p.metadata.get('issuer') or '—'
         amount   = p.metadata.get('amount')
         currency = p.metadata.get('currency', '$')
-        amt_str  = _md_escape(f'{currency}{float(amount):.2f}' if amount else '—')
+        amt_str  = f'{currency}{float(amount):.2f}' if amount else '—'
         if action_mode == 'rename':
-            dest = _md_escape(str(p.dest_file))
+            dest = str(p.dest_file)
         else:
             try:
-                dest = _md_escape(str(p.dest_file.relative_to(output_dir)))
+                dest = str(p.dest_file.relative_to(output_dir))
             except ValueError:
-                dest = _md_escape(str(p.dest_file))
+                dest = str(p.dest_file)
 
-        table_lines.append(
-            f'| {p.index} | {orig} | {cat} | {issuer} | {new} | {amt_str} | {dest} |\n'
-        )
+        row = [str(p.index), _md_escape(p.pdf_file.name), _md_escape(p.category),
+               _md_escape(issuer), _md_escape(p.new_filename), amt_str, _md_escape(dest)]
+        table_lines.append('| ' + ' | '.join(row) + ' |\n')
 
     table_lines.append('\n')
 
