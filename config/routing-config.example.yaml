@@ -1,0 +1,150 @@
+owners:
+  - Default
+
+route_templates:
+  default: "{category}/{issuer}/{year}"
+  Bills: "Bills/{issuer}/{year}"
+  Credit Card Statements: "Credit Card Statements/{issuer}/{year}"
+  Bank Account & Statements: "Bank Account & Statements/{issuer}/{year}"
+  Mortgage & Home Equity Accounts: "Mortgage & Home Equity Accounts/{account}/{year}"
+  Health Statements & Results: "Health Statements & Results/{year}"
+  Insurance: "Insurance/{year}"
+  Tax Returns: "Tax Returns/{year}"
+  Paystubs: "Paystubs/{year}"
+  Receipts: "Receipts/{year}"
+  Notices: "Notices/{year}"
+
+min_classification_score: 2
+
+monthly_categories:
+  - Bills
+  - Credit Card Statements
+  - Mortgage & Home Equity Accounts
+  - Bank Account & Statements
+
+account_in_filename_categories:
+  - Credit Card Statements
+  - Mortgage & Home Equity Accounts
+
+# Categories where amount should be excluded from file names.
+no_amount_categories:
+  - Tax Returns
+  - Notices
+
+doc_types:
+  Bills: Monthly
+  Credit Card Statements: Statement
+  Bank Account & Statements: Statement
+  Mortgage & Home Equity Accounts: Statement
+  Health Statements & Results: EOB
+  Insurance: Policy
+  Tax Returns: Return
+  Notices: Notice
+  Paystubs: Paycheck
+  Receipts: Receipt
+
+known_issuers:
+  bank of america: Bank of America
+  chase: Chase
+  amex: AMEX
+  citibank: Citibank
+  wells fargo: Wells Fargo
+  discover: Discover
+  allstate: Allstate
+  geico: GEICO
+  adp: ADP
+
+categories:
+  Credit Card Statements:
+    - credit card
+    - statement balance
+    - minimum payment due
+    - available credit
+
+  Bills:
+    - amount due
+    - billing period
+    - service address
+    - due date
+
+  Bank Account & Statements:
+    - checking account
+    - savings account
+    - beginning balance
+    - ending balance
+
+  Mortgage & Home Equity Accounts:
+    - mortgage
+    - loan number
+    - principal
+    - escrow
+
+  Health Statements & Results:
+    - explanation of benefits
+    - claim number
+    - provider name
+
+  Insurance:
+    - policy number
+    - deductible
+    - premium
+
+  Tax Returns:
+    - form 1040
+    - adjusted gross income
+    - internal revenue service
+
+  Paystubs:
+    - earnings statement
+    - pay period
+    - net pay
+
+  Receipts:
+    - order number
+    - order confirmation
+    - subtotal
+
+  Notices:
+    - no action required
+    - important notice
+    - informational update
+
+extraction_patterns:
+  date_formats:
+    - "%m/%d/%Y"
+    - "%m-%d-%Y"
+    - "%B %d, %Y"
+    - "%b %d, %Y"
+    - "%Y-%m-%d"
+
+  amount_labels:
+    - total amount due
+    - amount due
+    - total due
+    - statement balance
+    - payment due
+    - net pay
+    - total
+
+  amount_regex: "(?:total|amount|balance|payment)[\\s\\$]*([\\d,\\.]+)"
+  account_regex: "(?:account|account #|acct)[#\\s]*([\\d\\-]{4,})"
+
+ocr_settings:
+  pdf24_path: "C:\\Program Files\\PDF24\\pdf24-Ocr.exe"
+  keepOriginal: true
+  archiveFolder: "_processed-originals"
+
+manifest:
+  csv_path: "manifest.csv"
+  jsonl_path: "manifest.jsonl"
+  include_fields:
+    - filename
+    - category
+    - issuer
+    - owner
+    - account
+    - date
+    - amount
+    - ocr_confidence
+    - routed_to
+    - timestamp
