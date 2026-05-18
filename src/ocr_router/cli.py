@@ -488,17 +488,17 @@ def _content_summary(p: Proposal) -> str:
 
 def _append_history(output_dir: Path, proposals: list[Proposal], run_time: str,
                     action_mode: str = 'move', config: dict | None = None) -> Path:
-    """Append a dated section to PROCESSING_HISTORY.md.
+    """Append a dated section to PROCESSED_PDFS.md.
 
     Path resolution order:
     1. config['history']['path'] (absolute path, configurable per-user)
-    2. input_dir / PROCESSING_HISTORY.md  (legacy fallback)
+    2. input_dir / PROCESSED_PDFS.md  (legacy fallback)
     """
     cfg_path = (config or {}).get('history', {}).get('path')
     if cfg_path:
         history_file = Path(cfg_path)
     else:
-        history_file = output_dir / 'PROCESSING_HISTORY.md'
+        history_file = output_dir / 'PROCESSED_PDFS.md'
     history_file.parent.mkdir(parents=True, exist_ok=True)
     is_new = not history_file.exists()
 
