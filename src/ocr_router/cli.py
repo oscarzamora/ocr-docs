@@ -566,7 +566,7 @@ def _append_history(output_dir: Path, proposals: list[Proposal], run_time: str,
 
     lines += table_lines
 
-    with open(history_file, 'a', encoding='utf-8', newline='\n') as f:
+    with open(history_file, 'a', encoding='utf-8') as f:
         f.writelines(lines)
 
     return history_file
