@@ -121,8 +121,9 @@ def process(input: str, output: str, config: str, max_files: int,
                 text, confidence = PdfTextExtractor.extract_text_with_confidence(pdf_file)
                 pdf_to_extract = pdf_file
 
-                # OCR only when there's truly no text layer
-                if confidence == 0.0 and not skip_ocr:
+                # Always run ocrmypdf (OCR for scans, optimize=3 compression for all).
+                # skip_text=True ensures existing-text pages are not re-OCR'd.
+                if not skip_ocr:
                     ocr_tmp_dir.mkdir(parents=True, exist_ok=True)
                     ocr_out = ocr_tmp_dir / f"{pdf_file.stem}_ocr.pdf"
                     ok = ocr_engine.ocr_pdf(pdf_file, ocr_out)
@@ -130,7 +131,7 @@ def process(input: str, output: str, config: str, max_files: int,
                         text, confidence = PdfTextExtractor.extract_text_with_confidence(ocr_out)
                         pdf_to_extract = ocr_out
                     else:
-                        issues.append("OCR failed")
+                        issues.append("OCR/compression failed")
 
                 if confidence == 0.0:
                     skipped_ocr.append(pdf_file)

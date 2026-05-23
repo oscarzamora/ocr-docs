@@ -1,30 +1,80 @@
 ---
 mode: agent
-description: Scan __downloads__, OCR if needed, then recommend rename + destination folder per the established taxonomy. Append results to PROCESSED_PDFS.md.
+description: Scan __downloads__, OCR/compress PDFs and convert JPEGs to PDF, then recommend rename + destination folder per the established taxonomy. Append results to PROCESSED_PDFS.md.
 ---
 
 # Process new files in `__downloads__`
 
-You are processing PDFs (and occasionally other docs) that have landed in the staging folder:
+You are processing PDFs and JPEGs that have landed in the staging folder:
 
 `C:\Users\ozamo\OneDrive\Documents\__downloads__\`
 
 ## Workflow
 
-For each **new** PDF in `__downloads__` (skip files already listed in [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md)):
+### Step 0 — List candidates (ask before acting)
 
-1. **Scan** — list candidates. Ignore non-PDF assets (jpg, png, mp4, csv, pbix, xlsx) unless the user asks otherwise. Skip `Archive/`, `Tracklists/`, `desktop.ini`, and `PROCESSED_PDFS.md` itself.
-2. **OCR if needed (cache eagerly)** — for every PDF, check whether it already has a text layer (try extracting text with `pypdf`; if the result is empty / near-empty, treat it as a scan). Files named `Report_*.pdf` are almost always scans. For any PDF without a text layer:
-   - Run OCR via [ocr_engine.py](../../src/ocr_router/ocr_engine.py) **up front during the analyse phase**, before presenting the proposal table — do not wait for my confirmation to OCR.
-   - The engine uses `ocrmypdf` with `optimize=2` + **jbig2enc** (bundled at `tools/bin/jbig2.exe`) for maximum compression on B&W scans — typically 20–25% smaller than the original scan.
-   - **Cache the OCR'd version immediately**: overwrite the source PDF in `__downloads__` with the searchable copy so the text layer survives across sessions / restarts while I review.
-   - Move the pre-OCR original to `__downloads__\_processed-originals\` (create if missing) as a safety net — do not leave both copies in `__downloads__`.
-   - If a file already lives in `_processed-originals\`, do not re-OCR — treat the `__downloads__\` copy as the cached version.
-   - Mark the file as `(OCR)` in the history table.
-3. **Extract metadata** — date, amount (USD `$` or PEN `S/`), issuer, category, owner. Use the rules from [routing-config.yaml](../../config/routing-config.yaml) (`known_issuers`, `categories`, `monthly_categories`, `doc_types`, `no_amount_categories`).
-4. **Propose new filename** using the conventions in the Naming section below.
-5. **Propose destination folder** under `C:\Users\ozamo\OneDrive\Documents\` using the taxonomy in the Folders section below.
-6. **Do NOT move anything automatically.** Present the recommendations as a markdown pipe table for the user to confirm. Only after explicit confirmation, move the files and append the run to [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md).
+Scan `__downloads__` for new files (skip anything already listed in [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md)):
+
+- **PDFs** — include all `.pdf` files not in history. Skip `Archive/`, `Tracklists/`, `desktop.ini`, `PROCESSED_PDFS.md` itself, and `_processed-originals/`.
+- **JPEGs** — include all `.jpg` / `.jpeg` files not in history. Skip the same exclusion list above.
+- Ignore everything else (png, mp4, csv, pbix, xlsx) unless the user asks.
+
+**Present two separate lists** before doing anything else:
+
+1. `📄 PDFs to process (N)` — list filenames
+2. `🖼 JPEGs found (N)` — list filenames and ask: *"¿Cuáles proceso? (all / numbers / none)"*
+
+Wait for the user's JPEG answer before proceeding. For each JPEG the user **declines**, log it immediately in PROCESSED_PDFS.md under a `## skipped` entry so it is never surfaced again.
+
+---
+
+### Step 1 — Process PDFs
+
+For every confirmed PDF:
+
+1. **OCR + compress (always)** — every PDF goes through `ocrmypdf --optimize 3 --skip-text`:
+   - Run via [ocr_engine.py](../../src/ocr_router/ocr_engine.py) **up front during the analyse phase**, before presenting the proposal table.
+   - `--optimize 3` applies **lossy jbig2enc + pngquant compression** — typically **~40% smaller** on B&W financial statements, even when a text layer already exists.
+   - `--skip-text` ensures existing text pages are not re-OCR'd; Tesseract only runs on pure-scan pages.
+   - **Overwrite the source PDF** in `__downloads__` with the optimized copy immediately.
+   - Move the original to `__downloads__\_processed-originals\` (create if missing) as a safety net.
+   - If the original already lives in `_processed-originals\`, skip reprocessing — the `__downloads__\` copy is already the cached version.
+   - Mark the file as `(OCR)` if Tesseract ran, `(compressed)` if only optimization was applied.
+   - **✅ Searchability gate**: after processing, verify `conf > 0` via `PdfTextExtractor.extract_text_with_confidence()`. If conf=0, the file is **not acceptable as a final version** — flag it under **Pending iteration** and do not move it to its destination until the text layer is confirmed.
+
+2. **Extract metadata** — date, amount (USD `$` or PEN `S/`), issuer, category, owner using [routing-config.yaml](../../config/routing-config.yaml).
+3. **Propose new filename** (see Naming section).
+4. **Propose destination folder** (see Folders section).
+
+---
+
+### Step 2 — Process JPEGs (user-confirmed only)
+
+For each JPEG the user approved:
+
+1. **Convert to PDF + OCR** using `ocrmypdf` with **lossless compression**:
+   - `ocrmypdf --optimize 1 --image-dpi 300 <input.jpg> <output.pdf>` — optimize=1 is lossless (no pngquant/jbig2 lossy pass) to preserve photo/color quality.
+   - Output filename: same stem as the JPEG, extension `.pdf`, written to `__downloads__\`.
+   - Move the original JPEG to `__downloads__\_processed-originals\`.
+2. **Check for duplicates** — before proceeding, compare newly converted JPEGs against each other and against existing PDFs. WhatsApp images in particular are often duplicates of order confirmations or receipts already present. Delete duplicates and note in history.
+3. **Extract text** — run `PdfTextExtractor.extract_text_with_confidence()`. If conf=0 (Tesseract found no text):
+   - The image is likely a **phone photo of a screen** with background noise (keyboard, room, glare). Tesseract fails on these even with `--force-ocr`.
+   - **Preprocess with Pillow**: crop out the background/keyboard (keep only the document/dialog area), upscale 2× with LANCZOS, boost contrast (1.5×) and sharpness (2×), save as PNG at 300dpi.
+   - Convert the preprocessed PNG to PDF with OCR: `ocrmypdf --optimize 1 --image-dpi 300 <cropped.png> <output.pdf>`. This usually yields conf > 0 and a searchable PDF.
+   - If still conf=0 after preprocessing, **use pymupdf** (`fitz`) to render a page preview at 150 dpi and read the content visually — never leave a file as "Unknown" without trying visual inspection. Extract metadata manually from what you see.
+   - **✅ Searchability gate**: every JPEG→PDF final file must have conf > 0. Do not finalize or log a file as processed if it is not searchable.
+   - Note in history if the PDF was rebuilt from a cropped version (original JPEG preserved in `_processed-originals`).
+4. **Propose filename + destination** — same pipeline as PDFs above.
+5. Mark the file as `(JPEG→PDF+OCR)` in the history table.
+
+For each JPEG the user **declined**, log it in PROCESSED_PDFS.md as `skipped` (see Output format below) so it is never surfaced again.
+
+---
+
+### Step 3 — Review & confirm
+
+**ALWAYS present the proposal table and wait for explicit user confirmation before moving, renaming, or deleting any file.** The **Destination** column is always a *recommendation* — the user confirms or overrides each row. Do not assume the edge-case defaults (e.g. `__downloads__` for vehicle orders) without asking.
+
 
 ## Naming convention
 
@@ -100,15 +150,35 @@ Append a new section to [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downlo
 | 1  | ...           | ...      | ...    | ...      | ...    | ...         |
 ```
 
+For **declined JPEGs**, append a separate skipped block (can be in the same run section):
+
+```markdown
+**Skipped (do not reprocess):**
+| File | Reason |
+| ---- | ------ |
+| photo.jpg | user declined |
+```
+
 - Use **pipe tables only** (no bullet lists, no box-drawing). This is the confirmed standard.
 - Use `same` in the New Name column when the file was already correctly named.
 - Use `—` for empty cells.
+- JPEG→PDF entries: use the converted `.pdf` name in New Name, mark Original File as `photo.jpg (→PDF+OCR)`.
+- Treat [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md) as **append-only**: never regenerate, truncate, or overwrite earlier sections.
+- If a correction is needed, append a follow-up section rather than rewriting prior history.
 
 ## What to ask me before acting
 
-1. Confirm the list of files you intend to process (skip the ones already in history).
+1. **Always present the JPEG list and wait for a decision** before processing any JPEG (Step 0 above).
 2. **`Bills` and `Credit Card Statements` always stay in `__downloads__\`** — do not move them. Rename in place to the proposed filename and set the Destination column in the history table to `__downloads__ (pending payment)`. I will move them manually once payment is scheduled/cleared.
 3. For ambiguous categories (e.g. an EOB that could be Insurance vs Health), ask before moving.
 4. For any file that triggers a metadata edge case (DOB picked as date, missing issuer, score below `min_classification_score`), flag it under **Pending iteration** instead of silently guessing.
 
-Begin by listing the new candidates in `__downloads__` and the proposed table. Wait for my confirmation before moving files or writing to history.
+Begin by listing the new PDF and JPEG candidates in `__downloads__` and waiting for my JPEG selection before proceeding.
+
+## Cleanup (always run after completing the full session)
+
+Once all files have been moved/renamed and the history log is written:
+
+1. **Delete `_processed-originals\`** — remove the entire folder and all its contents. Originals are only a safety net during the session; do not leave them behind.
+2. **Delete any temp files** created during processing — e.g. `_cropped.png`, `_tess_*.txt`, `_tmp_*.pdf`, `_preprocessed_*.png`, or any other intermediate files in `__downloads__` or the project root.
+3. Confirm cleanup in your final message to the user.
