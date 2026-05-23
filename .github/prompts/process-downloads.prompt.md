@@ -15,7 +15,8 @@ For each **new** PDF in `__downloads__` (skip files already listed in [PROCESSED
 
 1. **Scan** — list candidates. Ignore non-PDF assets (jpg, png, mp4, csv, pbix, xlsx) unless the user asks otherwise. Skip `Archive/`, `Tracklists/`, `desktop.ini`, and `PROCESSED_PDFS.md` itself.
 2. **OCR if needed (cache eagerly)** — for every PDF, check whether it already has a text layer (try extracting text with `pypdf`; if the result is empty / near-empty, treat it as a scan). Files named `Report_*.pdf` are almost always scans. For any PDF without a text layer:
-   - Run OCR via [ocr_engine.py](../../src/ocr_router/ocr_engine.py) (`pdf24-Ocr.exe`) **up front during the analyse phase**, before presenting the proposal table — do not wait for my confirmation to OCR.
+   - Run OCR via [ocr_engine.py](../../src/ocr_router/ocr_engine.py) **up front during the analyse phase**, before presenting the proposal table — do not wait for my confirmation to OCR.
+   - The engine uses `ocrmypdf` with `optimize=2` + **jbig2enc** (bundled at `tools/bin/jbig2.exe`) for maximum compression on B&W scans — typically 20–25% smaller than the original scan.
    - **Cache the OCR'd version immediately**: overwrite the source PDF in `__downloads__` with the searchable copy so the text layer survives across sessions / restarts while I review.
    - Move the pre-OCR original to `__downloads__\_processed-originals\` (create if missing) as a safety net — do not leave both copies in `__downloads__`.
    - If a file already lives in `_processed-originals\`, do not re-OCR — treat the `__downloads__\` copy as the cached version.
