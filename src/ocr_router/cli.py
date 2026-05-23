@@ -225,6 +225,10 @@ def process(input: str, output: str, config: str, max_files: int,
                     if archive_dir:
                         # Archive the original (pre-OCR) for safekeeping
                         shutil.copy2(p.pdf_file, archive_dir / p.pdf_file.name)
+                    # Remove originals from input_dir now that they are safely copied
+                    p.pdf_file.unlink(missing_ok=True)
+                    if source_file != p.pdf_file:
+                        source_file.unlink(missing_ok=True)
 
                 entry = ManifestEntry(
                     filename=p.pdf_file.name,
@@ -243,6 +247,10 @@ def process(input: str, output: str, config: str, max_files: int,
                 moved += 1
             except Exception as e:
                 console.print(f"[red]Error moving {p.pdf_file.name}: {e}[/]")
+
+        # ── Cleanup OCR temp dir ─────────────────────────────────────────────
+        if ocr_tmp_dir.exists():
+            shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
 
         verb = "Renamed" if action_mode == 'rename' else "Moved"
         console.print(f"\n[bold green]✓ {verb} {moved} file(s)[/]"

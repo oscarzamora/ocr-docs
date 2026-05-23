@@ -32,17 +32,27 @@ Black line length is 100 (`pyproject.toml`).
 
 ## Architecture
 
-The pipeline processes PDFs in a fixed sequence across 5 independent components wired together in `cli.py`:
+The pipeline processes PDFs in a fixed sequence across 6 independent components wired together in `cli.py`:
 
 ```
-OcrEngine → PdfTextExtractor → MetadataExtractor → DocumentRouter → ManifestWriter
+OcrEngine → PdfTextExtractor → MetadataExtractor → DocumentRouter → FolderResolver → ManifestWriter
 ```
 
-1. **`ocr_engine.py`** — Shells out to `pdf24-Ocr.exe` (Windows). If PDF24 is unavailable, the CLI automatically falls back to raw text extraction (`--skip-ocr`).
-2. **`extractor.py`** — Two classes: `PdfTextExtractor` (static methods, uses `pypdf`) and `MetadataExtractor` (instance, takes `config dict`). Extracts date, amount, account, owner, issuer via regex.
+1. **`ocr_engine.py`** — Shells out to `pdf24-Ocr.exe` (Windows). OCR only runs on files with `confidence == 0.0` (no text layer). Falls back to text-only mode if PDF24 is unavailable.
+2. **`extractor.py`** — Two classes: `PdfTextExtractor` (static methods, uses `pypdf`) and `MetadataExtractor` (instance, takes `config dict`). Extracts date, amount, account, owner, issuer via regex. Issuer matching searches the first 1500 chars and last 1000 chars of text; longer keys in `known_issuers` are tried first (specificity wins).
 3. **`router.py`** — `DocumentRouter` classifies by scoring keyword matches per category, then formats the output path using `route_templates` from config (string `{placeholder}` substitution). `Unknown` path segments are stripped automatically.
-4. **`manifest.py`** — Writes `ManifestEntry` records to both CSV and JSONL in parallel.
-5. **`config.py`** — Loads `routing-config.yaml` into a Pydantic `RoutingConfig` model. All other components receive `config.model_dump()` (a plain dict).
+4. **`folder_resolver.py`** — `FolderResolver` applies density-aware routing: if the target path ends in a year and the parent exists, it checks whether the parent already has year subfolders. If yes, creates the year folder (`created`); if no, routes to the parent (`flat`). Returns `(dest_dir, status)` where status is `exact | created | flat | suggest`.
+5. **`manifest.py`** — Writes `ManifestEntry` records to both CSV and JSONL in parallel.
+6. **`config.py`** — Loads `routing-config.yaml` into a Pydantic `RoutingConfig` model. All other components receive `config.model_dump()` (a plain dict).
+
+### Interactive CLI phases
+
+The `process` command runs in distinct phases:
+1. **Analyse** — OCR + extract + classify all files silently; builds a `Proposal` dataclass per file
+2. **Review** — prints a Rich table of all proposals (`--dry-run` exits here)
+3. **Confirm** — prompts Move vs Rename-in-place, then which files to act on (`Enter`=all, `1,3,5`=selected, `skip 2,4`=all except, `q`=quit); skipped with `--no-interactive`
+4. **Execute** — moves/renames files, optionally archives originals to `_processed-originals/`
+5. **Log** — appends a section to `PROCESSED_PDFS.md`, writes manifest entries
 
 ## Key Conventions
 
@@ -52,7 +62,13 @@ OcrEngine → PdfTextExtractor → MetadataExtractor → DocumentRouter → Mani
 
 **Route path cleanup**: `DocumentRouter.build_route_path()` strips `Unknown/` segments from paths — so if a metadata field is missing, that folder level is omitted rather than creating an `Unknown/` directory.
 
-**Filename normalization format**: `{date}_{$amount}_{issuer}_{original_stem}.pdf` — components are skipped if the metadata field is absent.
+**Filename normalization format**: `{date} - {issuer} {doc_type} - {account} - {amount}{ext}` — components joined with ` - `, skipped entirely if the metadata field is absent. `doc_types` in config maps category → suffix (e.g. `Bills` → `Monthly`, `Paystubs` → `Paycheck`). Date is `YYYY.MM` for monthly categories, `YYYY.MM.DD` for others.
+
+**Config keys that control filename behavior**: `monthly_categories` (list), `account_in_filename_categories` (list), `no_amount_categories` (list), `doc_types` (map), `min_classification_score` (int, default 2). These live in the YAML and are passed through as plain dict values.
+
+**Issuer matching**: `_normalize_for_match` strips `&` and `-` entirely (`AT&T`→`att`, `T-Mobile`→`tmobile`). Keys in `known_issuers` are tried longest-first so specific names win over short aliases. Matching is applied to the first 1500 chars, last 1000 chars, and filename.
+
+**Contract detection**: When a CC or Bank statement has no `amount`, the router treats it as a contract — routes to `{category}/{issuer}` (no year folder), and the filename gets `Contract` as doc type regardless of `doc_types` config.
 
 **`ocr_confidence`** is a naive heuristic (`min(len(text) / 5000.0, 1.0)`), not a real OCR confidence score.
 
