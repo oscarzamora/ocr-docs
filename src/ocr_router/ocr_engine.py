@@ -7,9 +7,15 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Bundled Tesseract shipped with PDF24
-_PDF24_TESSERACT = Path(r'C:\Program Files\PDF24\tesseract\tesseract.exe')
-_PDF24_TESSDATA  = Path(r'C:\Program Files\PDF24\tesseract\tessdata')
+# Bundled Tesseract and GhostScript shipped with PDF24
+_PDF24_TESSERACT  = Path(r'C:\Program Files\PDF24\tesseract\tesseract.exe')
+_PDF24_TESSDATA   = Path(r'C:\Program Files\PDF24\tesseract\tessdata')
+_PDF24_GS_BIN     = Path(r'C:\Program Files\PDF24\gs\bin')
+
+# jbig2enc binary (enables optimize=2 in ocrmypdf for B&W scans)
+# Bundled in tools/bin/ so the repo is self-sufficient; fallback to user-local install.
+_REPO_ROOT        = Path(__file__).parents[2]
+_JBIG2ENC_BIN     = _REPO_ROOT / 'tools' / 'bin'
 
 
 class OcrEngine:
@@ -63,7 +69,7 @@ class OcrEngine:
                     skip_text=True,          # skip pages that already have text
                     progress_bar=False,
                     tesseract_timeout=120,
-                    optimize=0,              # skip GS optimization (not required)
+                    optimize=2,              # lossless GS + pngquant compression (smaller output)
                 )
             finally:
                 os.environ['PATH'] = orig_path
@@ -96,11 +102,16 @@ class OcrEngine:
         return None
 
     def _tesseract_env(self) -> dict:
-        """Build env vars so ocrmypdf finds the bundled Tesseract + tessdata."""
+        """Build env vars so ocrmypdf finds the bundled Tesseract + GhostScript + tessdata."""
         env = os.environ.copy()
         if self._tesseract_path == _PDF24_TESSERACT:
-            # Prepend PDF24 Tesseract dir to PATH
+            # Prepend PDF24 Tesseract and GhostScript dirs to PATH
             tess_dir = str(_PDF24_TESSERACT.parent)
-            env['PATH'] = tess_dir + os.pathsep + env.get('PATH', '')
+            gs_dir   = str(_PDF24_GS_BIN) if _PDF24_GS_BIN.exists() else ''
+            extra    = os.pathsep.join(d for d in [tess_dir, gs_dir] if d)
+            env['PATH'] = extra + os.pathsep + env.get('PATH', '')
             env['TESSDATA_PREFIX'] = str(_PDF24_TESSDATA)
+        # Always add jbig2enc if available (enables optimize=2)
+        if _JBIG2ENC_BIN.exists():
+            env['PATH'] = str(_JBIG2ENC_BIN) + os.pathsep + env.get('PATH', '')
         return env
