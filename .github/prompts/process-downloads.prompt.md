@@ -13,9 +13,9 @@ You are processing PDFs and JPEGs that have landed in the staging folder:
 
 ### Step 0 — List candidates (ask before acting)
 
-Scan `__downloads__` for new files (skip anything already listed in [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md)):
+Scan `__downloads__` for new files (skip anything already listed in the current month's log `YYYY.MM - PROCESSED_PDFS.md`):
 
-- **PDFs** — include all `.pdf` files not in history. Skip `Archive/`, `Tracklists/`, `desktop.ini`, `PROCESSED_PDFS.md` itself, and `_processed-originals/`.
+- **PDFs** — include all `.pdf` files not in history. Skip `Archive/`, `Tracklists/`, `desktop.ini`, any `YYYY.MM - PROCESSED_PDFS.md` file, `PROCESSED_PDFS.md`, and `_processed-originals/`.
 - **JPEGs** — include all `.jpg` / `.jpeg` files not in history. Skip the same exclusion list above.
 - Ignore everything else (png, mp4, csv, pbix, xlsx) unless the user asks.
 
@@ -24,7 +24,7 @@ Scan `__downloads__` for new files (skip anything already listed in [PROCESSED_P
 1. `📄 PDFs to process (N)` — list filenames
 2. `🖼 JPEGs found (N)` — list filenames and ask: *"¿Cuáles proceso? (all / numbers / none)"*
 
-Wait for the user's JPEG answer before proceeding. For each JPEG the user **declines**, log it immediately in PROCESSED_PDFS.md under a `## skipped` entry so it is never surfaced again.
+Wait for the user's JPEG answer before proceeding. For each JPEG the user **declines**, log it immediately in the monthly `YYYY.MM - PROCESSED_PDFS.md` under a `## skipped` entry so it is never surfaced again.
 
 ---
 
@@ -32,14 +32,15 @@ Wait for the user's JPEG answer before proceeding. For each JPEG the user **decl
 
 For every confirmed PDF:
 
-1. **OCR + compress (always)** — every PDF goes through `ocrmypdf --optimize 3 --skip-text`:
-   - Run via [ocr_engine.py](../../src/ocr_router/ocr_engine.py) **up front during the analyse phase**, before presenting the proposal table.
-   - `--optimize 3` applies **lossy jbig2enc + pngquant compression** — typically **~40% smaller** on B&W financial statements, even when a text layer already exists.
-   - `--skip-text` ensures existing text pages are not re-OCR'd; Tesseract only runs on pure-scan pages.
-   - **Overwrite the source PDF** in `__downloads__` with the optimized copy immediately.
-   - Move the original to `__downloads__\_processed-originals\` (create if missing) as a safety net.
-   - If the original already lives in `_processed-originals\`, skip reprocessing — the `__downloads__\` copy is already the cached version.
-   - Mark the file as `(OCR)` if Tesseract ran, `(compressed)` if only optimization was applied.
+1. **Check OCR readiness first** — before running `ocrmypdf`, call `PdfTextExtractor.extract_text_with_confidence()` on the file:
+   - **If `conf > 0` → the PDF is already OCR-ready. Skip OCR and compression entirely.** Do not run `ocrmypdf`, do not overwrite the source, do not move it to `_processed-originals\`. Mark it as `(text-ready)` in the history table.
+   - **If `conf == 0` → run `ocrmypdf --optimize 3 --skip-text`** via [ocr_engine.py](../../src/ocr_router/ocr_engine.py) during the analyse phase:
+     - `--optimize 3` applies **lossy jbig2enc + pngquant compression** — typically **~40% smaller** on B&W financial statements.
+     - `--skip-text` ensures existing text pages are not re-OCR'd; Tesseract only runs on pure-scan pages.
+     - **Overwrite the source PDF** in `__downloads__` with the optimized copy.
+     - Move the original to `__downloads__\_processed-originals\` (create if missing) as a safety net.
+     - If the original already lives in `_processed-originals\`, skip reprocessing — the `__downloads__\` copy is already the cached version.
+     - Mark the file as `(OCR)` if Tesseract ran, `(compressed)` if only optimization was applied.
    - **✅ Searchability gate**: after processing, verify `conf > 0` via `PdfTextExtractor.extract_text_with_confidence()`. If conf=0, the file is **not acceptable as a final version** — flag it under **Pending iteration** and do not move it to its destination until the text layer is confirmed.
 
 2. **Extract metadata** — date, amount (USD `$` or PEN `S/`), issuer, category, owner using [routing-config.yaml](../../config/routing-config.yaml).
@@ -67,13 +68,31 @@ For each JPEG the user approved:
 4. **Propose filename + destination** — same pipeline as PDFs above.
 5. Mark the file as `(JPEG→PDF+OCR)` in the history table.
 
-For each JPEG the user **declined**, log it in PROCESSED_PDFS.md as `skipped` (see Output format below) so it is never surfaced again.
+For each JPEG the user **declined**, log it in the monthly `YYYY.MM - PROCESSED_PDFS.md` as `skipped` (see Output format below) so it is never surfaced again.
 
 ---
 
 ### Step 3 — Review & confirm
 
 **ALWAYS present the proposal table and wait for explicit user confirmation before moving, renaming, or deleting any file.** The **Destination** column is always a *recommendation* — the user confirms or overrides each row. Do not assume the edge-case defaults (e.g. `__downloads__` for vehicle orders) without asking.
+
+### Step 4 — Duplicate check at destination (before every move)
+
+Before placing each file into its target folder, scan the destination directory for an existing file that covers the **same period**:
+
+- **Monthly categories** (Bills, CC, Bank, Mortgage, HSA, Rental) — match on `YYYY.MM` + issuer.
+- **Dated categories** (Receipts, EOB, Notices, Personal, Paystubs, Health, Insurance) — match on `YYYY.MM.DD` + issuer.
+- Compare against the proposed new filename, not the original. A match means the destination already contains a file with the same date prefix and issuer (any amount/suffix variation still counts as a candidate duplicate).
+
+If a candidate match exists, **stop and ask the user** before moving:
+
+> `⚠ '<proposed-name>' — existing file found at destination: '<existing-name>'. Replace, keep both (suffix with -v2), or skip?`
+
+- **Replace** → overwrite the existing file with the new one.
+- **Keep both** → append ` -v2` (or `-v3`, etc.) to the new filename and place alongside.
+- **Skip** → leave the new file in `__downloads__\` and log under **Pending iteration**.
+
+Never silently overwrite. Never silently rename. Always surface the conflict.
 
 
 ## Naming convention
@@ -104,7 +123,9 @@ Rules:
 | `HSA & FSA Transactions` | `HSA & FSA Transactions\{Year}` |
 | `Paystubs` | `Paystubs\{Year}` |
 | `Tax Returns` | `Tax Returns\{Year} Tax Return Related Documents` or `Tax Returns\Forms` |
-| `Health Statements & Results` | `HSA & FSA Transactions\{Year}` (**default for all health docs**) |
+| `Health Statements & Results` | `HSA & FSA Transactions\{Year}` (**default for ALL health docs** — clinic bills, dental, EOBs, etc.) |
+| `Auto loan payments (NMAC)` | `Bills\NMAC\{Year}` |
+| `Conservice utility bills (FamilyMemberA's apt)` | `FamilyMemberA\Lease\{Year}` |
 | `Insurance` | `Insurance\{Year}` |
 | `Receipts` | `Receipts, Payment, Warranty` |
 | `Notices` (employer/HR) | `Careers\{Employer}` (e.g. `Careers\DTCC`) |
@@ -124,7 +145,9 @@ Closed/inactive issuers go under `_ Closed Accounts _\` inside each category fol
 ## Edge cases (from prior runs)
 
 - **FPL Electric** — autopay account; never include a payment prompt or "amount due" note. Route to `Bills\FPL\{Year}`.
-- **All health documents** (EOBs, clinic statements, dental, vision, prescriptions) → default destination is `HSA & FSA Transactions\{Year}`, not `Health Statements & Results`. Always flag whether the patient balance is **still owed** and ask the user if the file should stay in `__downloads__` until paid.
+- **All health documents** (EOBs, clinic statements, dental, vision, prescriptions) → default destination is `HSA & FSA Transactions\{Year}`, **not** `Health Statements & Results`. Always flag whether the patient balance is **still owed** and ask the user if the file should stay in `__downloads__` until paid.
+- **Conservice utility bills** (The Renegade, Tallahassee — FamilyMemberA's apartment, Account 43480899) → `FamilyMemberA\Lease\{Year}`, not Bills. Naming: `YYYY.MM - Conservice Utilities FamilyMemberA - $amount.pdf`. The statement date is the billing date; the due date is one month later.
+- **NMAC / Nissan Motor Acceptance Company** auto loan payments → `Bills\NMAC\{Year}`. Naming: `YYYY.MM – Nissan Auto Loan (Acct 2207) – $amount.pdf` (em-dashes to match existing files).
 - **Rental Expenses** — always include the amount in the filename: `YYYY.MM.DD - {Vendor} - ${amount}.pdf`. Never omit amount even if the receipt looks blank; check carefully.
 - **Temp / junk** (vendor support pages, unrelated political files) → propose `DELETED` in the destination column.
 - **Vehicle order/spec sheets** (e.g. `911 Carrera T.pdf`, `2027 QX60 Order.jpeg`) → keep in `__downloads__` with a date prefix; they are work-in-progress until the purchase closes.
@@ -134,7 +157,7 @@ Closed/inactive issuers go under `_ Closed Accounts _\` inside each category fol
 
 ## Output format (history table)
 
-Append a new section to [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md):
+Append a new section to the **current month's log** `__downloads__\YYYY.MM - PROCESSED_PDFS.md` (create it if it doesn't exist for this month):
 
 ```markdown
 ## YYYY-MM-DD — N files processed
@@ -163,13 +186,14 @@ For **declined JPEGs**, append a separate skipped block (can be in the same run 
 - Use `same` in the New Name column when the file was already correctly named.
 - Use `—` for empty cells.
 - JPEG→PDF entries: use the converted `.pdf` name in New Name, mark Original File as `photo.jpg (→PDF+OCR)`.
-- Treat [PROCESSED_PDFS.md](../../../OneDrive/Documents/__downloads__/PROCESSED_PDFS.md) as **append-only**: never regenerate, truncate, or overwrite earlier sections.
+- Treat the monthly log as **append-only**: never regenerate, truncate, or overwrite earlier sections.
 - If a correction is needed, append a follow-up section rather than rewriting prior history.
+- **⚠ Always write log entries using Python** (open/write), never PowerShell `Add-Content` with a double-quoted here-string. PowerShell silently strips `$` from currency amounts (e.g. `$2,056.47` becomes `,056.47`).
 
 ## What to ask me before acting
 
 1. **Always present the JPEG list and wait for a decision** before processing any JPEG (Step 0 above).
-2. **`Bills` and `Credit Card Statements` always stay in `__downloads__\`** — do not move them. Rename in place to the proposed filename and set the Destination column in the history table to `__downloads__ (pending payment)`. I will move them manually once payment is scheduled/cleared.
+2. **Credit Card and Bills are on autopay — move directly to their destination folder.** Do not hold them in `__downloads__`. Only ask the user if a statement is unexpectedly large or has a past-due balance that suggests a payment problem.
 3. For ambiguous categories (e.g. an EOB that could be Insurance vs Health), ask before moving.
 4. For any file that triggers a metadata edge case (DOB picked as date, missing issuer, score below `min_classification_score`), flag it under **Pending iteration** instead of silently guessing.
 

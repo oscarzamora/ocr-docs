@@ -38,11 +38,17 @@ class OcrEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def ocr_pdf(self, input_pdf: Path, output_pdf: Optional[Path] = None) -> bool:
-        """Add a text layer to input_pdf and write to output_pdf.
+    def ocr_pdf(self, input_pdf: Path, output_pdf: Optional[Path] = None,
+                optimize: int = 3, image_dpi: Optional[int] = None) -> bool:
+        """Add a text layer to input_pdf (or convert an image) and write to output_pdf.
 
         Returns True on success, False on failure.
-        Only processes files that have no extractable text (confidence == 0).
+
+        Args:
+            optimize: ocrmypdf optimize level.
+                3 = lossy jbig2+pngquant (~40% smaller, good for B&W financial statements).
+                1 = lossless only (use for color photos / JPEG→PDF to avoid quality loss).
+            image_dpi: DPI hint when input is a raster image (JPEG/PNG). None for PDFs.
         """
         if output_pdf is None:
             output_pdf = input_pdf.parent / f"{input_pdf.stem}_ocr.pdf"
@@ -53,7 +59,6 @@ class OcrEngine:
 
         try:
             import ocrmypdf
-            # Point ocrmypdf at the bundled Tesseract by setting env before call
             env = self._tesseract_env()
             orig_path = os.environ.get('PATH', '')
             orig_tessdata = os.environ.get('TESSDATA_PREFIX', '')
@@ -61,16 +66,17 @@ class OcrEngine:
             if 'TESSDATA_PREFIX' in env:
                 os.environ['TESSDATA_PREFIX'] = env['TESSDATA_PREFIX']
             try:
-                ocrmypdf.ocr(
-                    input_pdf,
-                    output_pdf,
-                    language='eng+spa',      # English + Spanish for Peruvian docs
+                kwargs: dict = dict(
+                    language='eng+spa',
                     deskew=True,
-                    skip_text=True,          # skip pages that already have text
+                    skip_text=True,
                     progress_bar=False,
                     tesseract_timeout=120,
-                    optimize=2,              # lossless GS + pngquant compression (smaller output)
+                    optimize=optimize,
                 )
+                if image_dpi is not None:
+                    kwargs['image_dpi'] = image_dpi
+                ocrmypdf.ocr(input_pdf, output_pdf, **kwargs)
             finally:
                 os.environ['PATH'] = orig_path
                 if orig_tessdata:
@@ -111,7 +117,7 @@ class OcrEngine:
             extra    = os.pathsep.join(d for d in [tess_dir, gs_dir] if d)
             env['PATH'] = extra + os.pathsep + env.get('PATH', '')
             env['TESSDATA_PREFIX'] = str(_PDF24_TESSDATA)
-        # Always add jbig2enc if available (enables optimize=2)
+        # Always add jbig2enc if available (enables optimize=3 lossy compression)
         if _JBIG2ENC_BIN.exists():
             env['PATH'] = str(_JBIG2ENC_BIN) + os.pathsep + env.get('PATH', '')
         return env
