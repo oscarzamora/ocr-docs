@@ -865,5 +865,222 @@ def feedback_export(output: Optional[str], config: Optional[str], to_path: str):
     console.print(f"[green]✓ Exported to {dest}[/]")
 
 
+@feedback.command("bootstrap")
+@click.option("--source", type=click.Path(exists=True, file_okay=False), required=True,
+              help="Folder of PDFs to replay (e.g. __downloads__).")
+@click.option("--history", "history_path", type=click.Path(exists=True), required=True,
+              help="PROCESSED_PDFS.md file (or a folder containing *PROCESSED_PDFS*.md).")
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root (used to locate _feedback/ if no override).")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env,
+              help="Config YAML path (for ocr_settings and feedback.path).")
+@click.option("--include-unprocessed", is_flag=True,
+              help="Also log files with no history match (as 'pending').")
+@click.option("--force", is_flag=True,
+              help="Re-import even if the filename is already in the log.")
+@click.option("--skip-ocr", is_flag=True,
+              help="Never OCR; record only what pypdf can already read.")
+def feedback_bootstrap(source: str, history_path: str, output: Optional[str],
+                       config: Optional[str], include_unprocessed: bool,
+                       force: bool, skip_ocr: bool):
+    """Replay processed PDFs from a download folder into the feedback log.
+
+    Reads each PDF in --source, looks up its row in --history, and writes a
+    'confirmed' record to the feedback log. Runs full OCR only for files
+    that have no text layer. --history can be a file OR a directory; if a
+    directory, every '*PROCESSED_PDFS*.md' file inside is parsed.
+    """
+    from ocr_router.feedback import (
+        bootstrap_from_downloads,
+        parse_processed_history_paths,
+        index_history,
+    )
+
+    cfg_dict: dict = {}
+    if config:
+        try:
+            cfg_dict = load_config(config).model_dump()
+        except Exception as exc:
+            console.print(f"[yellow]⚠ Could not load config ({exc}); using defaults.[/]")
+
+    log_path = _resolve_feedback_path(output, config)
+    log = FeedbackLog(log_path)
+
+    ocr_engine = None if skip_ocr else OcrEngine(cfg_dict)
+    if ocr_engine and not ocr_engine.is_available():
+        console.print("[yellow]⚠ Tesseract not found — falling back to --skip-ocr behavior.[/]")
+        ocr_engine = None
+
+    source_dir = Path(source)
+    history = Path(history_path)
+
+    pdf_count = len(list(source_dir.rglob("*.pdf")))
+    if pdf_count == 0:
+        console.print(f"[yellow]No PDFs found in {source_dir}[/]")
+        return
+
+    # Preview the parsed history so the user knows what was loaded
+    history_entries = parse_processed_history_paths(history)
+    history_index = index_history(history_entries)
+
+    console.print(f"[bold cyan]Bootstrapping from {pdf_count} PDF(s) in {source_dir}…[/]")
+    console.print(f"  History: [dim]{history}[/] ({len(history_entries)} rows, "
+                  f"{len(history_index)} unique filenames)")
+    console.print(f"  Log:     [dim]{log_path}[/]")
+    if include_unprocessed:
+        console.print("  Mode:    [dim]include unprocessed (pending records)[/]")
+    if force:
+        console.print("  Mode:    [dim]force re-import[/]")
+    if skip_ocr or ocr_engine is None:
+        console.print("  OCR:     [dim]disabled (pypdf text layer only)[/]")
+    else:
+        console.print("  OCR:     [dim]on-demand for files with no text layer[/]")
+
+    # Write the parsed history into a temp Markdown file the bootstrap function
+    # can re-parse — keeps bootstrap_from_downloads's signature simple. (Or we
+    # could refactor to accept the index directly; not worth it for this iteration.)
+    import tempfile
+    if history.is_dir():
+        # Concatenate all matched .md files into one temp file
+        from ocr_router.feedback.bootstrap import parse_processed_history_paths as _p
+        merged = "\n\n".join(
+            f.read_text(encoding="utf-8")
+            for f in sorted(history.glob("*PROCESSED_PDFS*.md"))
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as tf:
+            tf.write(merged)
+            history_for_func = Path(tf.name)
+    else:
+        history_for_func = history
+
+    with Progress(transient=True) as prog:
+        task = prog.add_task("Bootstrapping…", total=pdf_count)
+
+        def _cb(i, total, path):
+            prog.update(task, completed=i)
+
+        stats = bootstrap_from_downloads(
+            source_dir=source_dir,
+            history_path=history_for_func,
+            feedback_log=log,
+            ocr_engine=ocr_engine,
+            force=force,
+            include_unprocessed=include_unprocessed,
+            skip_ocr=skip_ocr or ocr_engine is None,
+            progress_cb=_cb,
+        )
+
+    if history.is_dir():
+        try:
+            history_for_func.unlink()
+        except Exception:
+            pass
+
+    _print_bootstrap_summary(stats)
+
+
+@feedback.command("bootstrap-tree")
+@click.option("--root", type=click.Path(exists=True, file_okay=False), required=True,
+              help="Organized Documents root (e.g. C:\\Users\\me\\OneDrive\\Documents).")
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root for _feedback/ location (defaults to --root).")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env,
+              help="Config YAML path (for ocr_settings and feedback.path).")
+@click.option("--force", is_flag=True,
+              help="Re-import filenames already present in the log.")
+@click.option("--skip-ocr", is_flag=True,
+              help="Never OCR; record only what pypdf can already read.")
+@click.option("--max-files", type=int, default=None,
+              help="Cap on number of PDFs to process (useful for a smoke test).")
+@click.option("--only", "only_categories", multiple=True,
+              help="Only scan these top-level category dirs (repeatable).")
+@click.option("--exclude", "exclude_categories", multiple=True,
+              help="Skip these top-level category dirs (repeatable).")
+def feedback_bootstrap_tree(root: str, output: Optional[str], config: Optional[str],
+                            force: bool, skip_ocr: bool, max_files: Optional[int],
+                            only_categories: tuple[str, ...],
+                            exclude_categories: tuple[str, ...]):
+    """Bootstrap from the organized Documents tree (path → category/issuer/year).
+
+    Walks every PDF under --root and records a 'confirmed' entry per file,
+    using its folder layout as the label. Use this when PROCESSED_PDFS.md is
+    missing or incomplete but the filed PDFs themselves are intact.
+    """
+    from ocr_router.feedback import bootstrap_from_tree
+
+    cfg_dict: dict = {}
+    if config:
+        try:
+            cfg_dict = load_config(config).model_dump()
+        except Exception as exc:
+            console.print(f"[yellow]⚠ Could not load config ({exc}); using defaults.[/]")
+
+    root_dir = Path(root)
+    log_output = output or root
+    log_path = _resolve_feedback_path(log_output, config)
+    log = FeedbackLog(log_path)
+
+    ocr_engine = None if skip_ocr else OcrEngine(cfg_dict)
+    if ocr_engine and not ocr_engine.is_available():
+        console.print("[yellow]⚠ Tesseract not found — falling back to --skip-ocr behavior.[/]")
+        ocr_engine = None
+
+    console.print(f"[bold cyan]Walking Documents tree at {root_dir}…[/]")
+    console.print(f"  Log:     [dim]{log_path}[/]")
+    if only_categories:
+        console.print(f"  Only:    [dim]{', '.join(only_categories)}[/]")
+    if exclude_categories:
+        console.print(f"  Exclude: [dim]{', '.join(exclude_categories)}[/]")
+    if max_files:
+        console.print(f"  Cap:     [dim]{max_files} files[/]")
+    if skip_ocr or ocr_engine is None:
+        console.print("  OCR:     [dim]disabled (pypdf text layer only)[/]")
+    else:
+        console.print("  OCR:     [dim]on-demand for files with no text layer[/]")
+
+    with Progress(transient=False) as prog:
+        task = prog.add_task("Scanning…", total=None)
+
+        def _cb(i, total, path):
+            prog.update(task, completed=i, total=total,
+                        description=f"[cyan]Scanning…[/] {i}/{total}")
+
+        stats = bootstrap_from_tree(
+            root=root_dir,
+            feedback_log=log,
+            ocr_engine=ocr_engine,
+            force=force,
+            skip_ocr=skip_ocr or ocr_engine is None,
+            only_categories=list(only_categories) if only_categories else None,
+            excluded_categories=list(exclude_categories) if exclude_categories else None,
+            max_files=max_files,
+            progress_cb=_cb,
+        )
+
+    _print_bootstrap_summary(stats)
+
+
+def _print_bootstrap_summary(stats) -> None:
+    """Render BootstrapStats as a Rich table."""
+    t = Table(title="Bootstrap summary", box=box.ROUNDED)
+    t.add_column("Metric", style="cyan")
+    t.add_column("Count", style="green", justify="right")
+    t.add_row("Scanned",                    str(stats.scanned))
+    t.add_row("Matched label",              str(stats.matched))
+    t.add_row("Records appended",           str(stats.appended))
+    t.add_row("Skipped (already in log)",   str(stats.already_logged))
+    t.add_row("Skipped (no label)",         str(stats.no_history_match))
+    t.add_row("Had text layer",             str(stats.text_extracted))
+    t.add_row("OCR run",                    str(stats.ocr_run))
+    t.add_row("OCR failed",                 str(stats.ocr_failed))
+    t.add_row("Errors",                     str(len(stats.errors)))
+    console.print(t)
+
+    if stats.errors:
+        console.print("\n[yellow]First few errors:[/]")
+        for e in stats.errors[:5]:
+            console.print(f"  • {e}")
+
+
 if __name__ == '__main__':
     cli()
