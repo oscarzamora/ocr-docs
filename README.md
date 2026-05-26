@@ -49,7 +49,7 @@ Install PDF24 (optional but recommended):
 |---|---|
 | Winget | `winget install SoftwareAG.PDF24Creator` |
 | Chocolatey | `choco install pdf24creator` |
-| Download | https://www.pdf24.org/en/creator.html |
+| Download | https://tools.pdf24.org/en/creator |
 
 ### Clone and install dependencies
 
