@@ -162,3 +162,23 @@ feedback:
   # var, or set feedback.embeddings_db below.
   # Default: sibling of the feedback log -> <feedback_dir>/examples.sqlite
   # embeddings_db: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\examples.sqlite"
+
+# Local-first LLM classifier (L4). Off by default — your run is 100%
+# deterministic until you flip enabled: true.
+# Requires `ollama serve` running and the models pulled, e.g.:
+#   ollama pull llama3.2:3b
+#   ollama pull nomic-embed-text
+llm:
+  enabled: false
+  # When LLM disagrees with keyword scoring, route the doc to HITL if the
+  # LLM's own confidence is below this threshold.
+  confidence_threshold: 0.6
+  # Number of most-similar past confirmed decisions to inject into the prompt.
+  # Set to 0 to disable few-shot.
+  fewshot_k: 5
+  local:
+    model: "llama3.2:3b"          # any tagged Ollama chat model
+    # host: "http://localhost:11434"
+    timeout_s: 30
+  embedder:
+    model: "nomic-embed-text"

@@ -1259,5 +1259,180 @@ def feedback_search(query: str, output: Optional[str], config: Optional[str],
     store.close()
 
 
+# ── LLM commands (Step 4: L4 backbone) ───────────────────────────────────────
+
+@cli.group()
+def llm():
+    """Local-first LLM classifier (Ollama). Used by `process` when enabled."""
+    pass
+
+
+def _build_llm_classifier(config_path: Optional[str], output: Optional[str]):
+    """Helper used by `llm doctor` and `llm classify`."""
+    from ocr_router.feedback import (
+        DEFAULT_EMBED_MODEL, EmbeddingStore, OllamaEmbedder,
+    )
+    from ocr_router.llm import LLMClassifier, NullBackend, OllamaBackend
+    from ocr_router.llm.classifier import LLMConfig
+
+    cfg_dict: dict = {}
+    if config_path:
+        try:
+            cfg_dict = load_config(config_path).model_dump()
+        except Exception as exc:
+            console.print(f"[yellow]⚠ Could not load config ({exc}); using defaults.[/]")
+
+    llm_cfg = LLMConfig.from_dict(cfg_dict)
+
+    if not llm_cfg.enabled:
+        return LLMClassifier(
+            backend=NullBackend("LLM disabled in config (set llm.enabled: true)"),
+            config=cfg_dict,
+        )
+
+    backend = OllamaBackend(model=llm_cfg.local_model, host=llm_cfg.host)
+    embedder = OllamaEmbedder(model=llm_cfg.embed_model or DEFAULT_EMBED_MODEL, host=llm_cfg.host)
+
+    db_path = _resolve_embed_db_path(output, config_path)
+    store: Optional[EmbeddingStore] = None
+    if db_path.exists():
+        store = EmbeddingStore(db_path)
+
+    return LLMClassifier(
+        backend=backend, embedder=embedder, store=store, config=cfg_dict,
+    )
+
+
+@llm.command("doctor")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env,
+              help="Config YAML path.")
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root (to locate the embedding DB).")
+def llm_doctor(config: Optional[str], output: Optional[str]):
+    """Diagnose Ollama + embedder + embedding store availability."""
+    from ocr_router.feedback import (
+        DEFAULT_EMBED_MODEL, EmbeddingStore, OllamaEmbedder, OllamaUnavailable,
+    )
+    from ocr_router.llm import OllamaBackend
+    from ocr_router.llm.classifier import LLMConfig
+
+    cfg_dict: dict = {}
+    if config:
+        try:
+            cfg_dict = load_config(config).model_dump()
+        except Exception:
+            pass
+
+    llm_cfg = LLMConfig.from_dict(cfg_dict)
+
+    t = Table(title="LLM doctor", box=box.ROUNDED, show_lines=False)
+    t.add_column("Component", style="cyan")
+    t.add_column("Status",    style="white", width=10)
+    t.add_column("Detail",    style="dim")
+
+    # 1. Config flag
+    t.add_row(
+        "config llm.enabled",
+        "[green]on[/]" if llm_cfg.enabled else "[yellow]off[/]",
+        "edit routing-config.yaml → llm.enabled: true",
+    )
+
+    # 2. Chat backend
+    chat = OllamaBackend(model=llm_cfg.local_model, host=llm_cfg.host)
+    info = chat.info()
+    t.add_row(
+        "chat backend",
+        "[green]ok[/]" if info.available else "[red]down[/]",
+        f"{info.label}" + (f" — {info.note}" if info.note else ""),
+    )
+
+    # 3. Embedder
+    embedder = OllamaEmbedder(
+        model=llm_cfg.embed_model or DEFAULT_EMBED_MODEL, host=llm_cfg.host,
+    )
+    try:
+        _ = embedder.embed("doctor")
+        t.add_row("embedder", "[green]ok[/]",
+                  f"local:{embedder.model}")
+    except OllamaUnavailable as exc:
+        t.add_row("embedder", "[red]down[/]", str(exc))
+
+    # 4. Embedding store
+    db_path = _resolve_embed_db_path(output, config)
+    if db_path.exists():
+        store = EmbeddingStore(db_path)
+        s = store.stats()
+        t.add_row(
+            "embedding store",
+            "[green]ok[/]" if s.total > 0 else "[yellow]empty[/]",
+            f"{db_path}  —  {s.total} records, dim={s.dim}",
+        )
+        store.close()
+    else:
+        t.add_row("embedding store", "[yellow]missing[/]", str(db_path))
+
+    console.print(t)
+
+
+@llm.command("classify")
+@click.option("--file", "file_path", type=click.Path(exists=True), required=True,
+              help="PDF to classify.")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root (for the embedding DB).")
+def llm_classify_file(file_path: str, config: Optional[str], output: Optional[str]):
+    """Run the LLM classifier on one PDF and print the verdict (no moves)."""
+    from ocr_router.llm import NullBackend
+    pdf = Path(file_path)
+
+    classifier = _build_llm_classifier(config, output)
+    if isinstance(classifier.backend, NullBackend):
+        console.print(f"[yellow]LLM is disabled. Reason: {classifier.backend.reason}[/]")
+        return
+
+    cfg_dict: dict = {}
+    if config:
+        try:
+            cfg_dict = load_config(config).model_dump()
+        except Exception:
+            pass
+
+    # OCR if needed
+    ocr_engine = OcrEngine(cfg_dict)
+    text, confidence = PdfTextExtractor.extract_text_with_confidence(pdf)
+    if confidence == 0.0 and ocr_engine.is_available():
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            out = Path(td) / f"{pdf.stem}_ocr.pdf"
+            if ocr_engine.ocr_pdf(pdf, out):
+                text, confidence = PdfTextExtractor.extract_text_with_confidence(out)
+
+    if not text or confidence == 0.0:
+        console.print("[yellow]No text could be extracted from this PDF.[/]")
+        return
+
+    console.print(f"[bold cyan]Classifying:[/] {pdf.name}")
+    console.print(f"[dim]Text confidence: {confidence:.2f}, length: {len(text)} chars[/]")
+
+    result, info = classifier.classify(text=text, filename=pdf.name)
+
+    if result is None:
+        console.print(f"[red]Classifier returned no result. Reason: {info.error}[/]")
+        return
+
+    console.print()
+    console.print(f"  [bold]Category:  [/] {result.category}")
+    console.print(f"  [bold]Issuer:    [/] {result.issuer or '—'}")
+    console.print(f"  [bold]Confidence:[/] {result.confidence:.2f}")
+    if result.reasons:
+        console.print("  [bold]Reasons:[/]")
+        for r in result.reasons:
+            console.print(f"    • {r}")
+    console.print()
+    console.print(f"[dim]Backend: {info.backend}  •  {info.duration_ms} ms  •  "
+                  f"few-shot: {info.fewshot_count}  •  prompt {info.prompt_chars} chars, "
+                  f"completion {info.completion_chars} chars[/]")
+
+
 if __name__ == '__main__':
     cli()

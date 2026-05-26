@@ -359,11 +359,17 @@ def index_log_into_store(
     embedder: OllamaEmbedder,
     *,
     progress_cb=None,
+    max_chars: int = 6000,
 ) -> IndexStats:
     """Embed every ``confirmed`` record in ``log_records`` not already present.
 
     ``log_records`` is an iterable of dicts as produced by
     :meth:`ocr_router.feedback.FeedbackLog.iter_records`.
+
+    Embedded text is trimmed to ``max_chars`` (default 6000, well under the
+    nomic-embed-text 2048-token / ~8000-char context window) so we never
+    trigger Ollama's ``input length exceeds the context length`` error on
+    multi-page statements.
 
     The first Ollama error aborts the loop because it usually means the
     daemon is down — there is no point continuing to fail.
@@ -392,9 +398,11 @@ def index_log_into_store(
         if not text:
             stats.skipped_empty += 1
             continue
+        # Trim aggressively so long OCR excerpts don't blow the embedder's context.
+        text_for_embed = text[:max_chars]
 
         try:
-            vec = embedder.embed(text)
+            vec = embedder.embed(text_for_embed)
         except OllamaUnavailable as exc:
             logger.warning("Embedder unavailable, aborting indexing: %s", exc)
             stats.errors += 1
