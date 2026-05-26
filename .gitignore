@@ -84,3 +84,9 @@ password*
 **/secrets/
 humans_feedback.csv
 reviewed_manifests/
+
+# Local history-rewrite safety artifacts
+backup/
+*.bundle
+scripts/sanitize-replacements*.txt
+scripts/sanitize-mailmap.txt
