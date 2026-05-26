@@ -9,7 +9,7 @@ description = "Intelligent batch PDF OCR processing with automated document rout
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    {name = "OwnerA", email = "maintainers@example.com"}
+    {name = "OCR Router Maintainers", email = "maintainers@example.com"}
 ]
 
 dependencies = [

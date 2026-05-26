@@ -137,7 +137,8 @@ ocr-docs/
 │   ├── manifest.py         # CSV + JSONL manifest writer
 │   └── config.py           # Pydantic config loader
 ├── config/
-│   └── routing-config.yaml # All routing rules, issuers, keywords, templates
+│   ├── routing-config.example.yaml # Public-safe template
+│   └── routing-config.local.yaml   # Local-only (gitignored)
 ├── scripts/
 │   └── dry_run.py          # Standalone non-destructive test runner
 └── tests/
@@ -181,3 +182,13 @@ git status
 If any personal file appears, add or update `.gitignore` first.
 
 Important: if sensitive data was committed in past history, removing it from the current commit is not enough. Rotate secrets and rewrite git history before making the repository fully public.
+
+### Sanitization Gate (before push)
+
+Run the repository scanner to block accidental personal data in tracked files:
+
+```powershell
+python scripts/sanitize_check.py
+```
+
+The same check runs in GitHub Actions on pull requests and pushes to `main`.

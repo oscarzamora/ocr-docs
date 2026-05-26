@@ -5,7 +5,7 @@
 ### 1. Setup Virtual Environment
 
 ```powershell
-cd c:\Users\ozamo\vscode\ocr-docs
+cd C:\path\to\ocr-docs
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```

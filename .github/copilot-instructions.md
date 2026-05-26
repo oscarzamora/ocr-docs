@@ -85,15 +85,15 @@ DEBUG         # false (default)
 
 Store in `.env` (never commit). Use `.env.example` for templates.
 
-## Target Folder Structure (OneDrive\Documents)
+## Target Folder Structure (Documents)
 
-The output of this pipeline is `C:\Users\ozamo\OneDrive\Documents`. The real folder taxonomy is:
+The output of this pipeline is `C:\Users\<user>\Documents`. The real folder taxonomy is:
 
 ### Financial — by issuer then year
 | Category | Path pattern | Notes |
 |---|---|---|
 | `Bank Account & Statements` | `Bank Account & Statements/{issuer}/{year}` | Issuer examples: `Citibank`, `Chase Checking`, `Fidelity`, `PNC`, `Capital One` |
-| `Credit Card Statements` | `Credit Card Statements/{issuer}/{year}` | Issuer includes owner suffix: `AMEX (A)`, `Bank of America (B)`, `Citibank - AAdvantage (A)` |
+| `Credit Card Statements` | `Credit Card Statements/{issuer}/{year}` | Issuer may include owner suffixes such as `AMEX (A)`, `Bank of America (B)` |
 | `Bills` | `Bills/{issuer}/{year}` | Issuer examples: `AT&T`, `FPL`, `T-Mobile`, `Pure Water Pool Service` |
 | `Mortgage & Home Equity Accounts` | `Mortgage & Home Equity Accounts/{lender + account}/{year}` | Lender examples: `PennyMac - Weston Account - Loan # 8193759048`, `Rocket Mortgage - Boca Raton Account # 0710628363` |
 | `HSA & FSA Transactions` | `HSA & FSA Transactions/{year}` | No issuer level |
@@ -112,7 +112,7 @@ The output of this pipeline is `C:\Users\ozamo\OneDrive\Documents`. The real fol
 - `Careers`, `Contracts`, `Real Estate`, `Rental`, `Tax Returns`, `Remodeling`, `Travel` — manually filed
 
 ### Owner encoding convention
-Owners **OZ** (Oscar/OwnerA) and **GV** (OwnerB) are embedded in the **issuer name** as a suffix, e.g. `AMEX (A)`, `Bank of America (B)`. They are **not** a separate folder level in practice.
+Owner markers can be embedded in the **issuer name** as a suffix, e.g. `AMEX (A)`, `Bank of America (B)`. They are **not** a separate folder level in practice.
 
 ### Closed accounts convention
 Inactive/closed issuers are moved to `_ Closed Accounts _` subdirectory within each category.
@@ -125,7 +125,7 @@ Inactive/closed issuers are moved to `_ Closed Accounts _` subdirectory within e
 The current `routing-config.yaml` has mismatches with the real folder structure:
 - `Bills` template uses `{account}` but real path uses **issuer name**, not account number
 - `Credit Card Statements` template uses `{account}` but real path uses **issuer name with owner suffix**
-- `owners: [OwnerA]` is defined but owner is embedded in the issuer string, not injected as a standalone path segment
+- `owners` values should stay generic in tracked config; owner labels can be embedded in issuer strings when needed
 - `Bank Account & Statements` has no route template entry — it falls through to `default`
 
 When adding features or fixing routing, align output paths to the conventions above.

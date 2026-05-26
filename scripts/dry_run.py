@@ -13,6 +13,7 @@ Usage:
 import re
 import sys
 import tempfile
+import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -23,9 +24,14 @@ from ocr_router.folder_resolver import FolderResolver
 from ocr_router.ocr_engine import OcrEngine
 from ocr_router.router import DocumentRouter
 
-CONFIG_PATH = Path(__file__).parent.parent / 'config' / 'routing-config.yaml'
-DOWNLOADS_DIR = Path(r'C:\Users\ozamo\OneDrive\Documents\__downloads__')
-OUTPUT_ROOT = Path(r'C:\Users\ozamo\OneDrive\Documents')
+WORKSPACE_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG = WORKSPACE_ROOT / 'config' / 'routing-config.local.yaml'
+if not DEFAULT_CONFIG.exists():
+    DEFAULT_CONFIG = WORKSPACE_ROOT / 'config' / 'routing-config.yaml'
+
+CONFIG_PATH = Path(os.getenv('OCR_CONFIG_PATH', str(DEFAULT_CONFIG)))
+OUTPUT_ROOT = Path(os.getenv('OCR_DOCS_OUTPUT_ROOT', str(Path.home() / 'Documents')))
+DOWNLOADS_DIR = Path(os.getenv('OCR_DOCS_DOWNLOADS_DIR', str(OUTPUT_ROOT / '__downloads__')))
 
 # Already-renamed files (ground truth) — skip processing, only count
 ALREADY_RENAMED = {f.name for f in DOWNLOADS_DIR.glob('*.pdf')

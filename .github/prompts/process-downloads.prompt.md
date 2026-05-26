@@ -7,7 +7,7 @@ description: Scan __downloads__, OCR/compress PDFs and convert JPEGs to PDF, the
 
 You are processing PDFs and JPEGs that have landed in the staging folder:
 
-`C:\Users\ozamo\OneDrive\Documents\__downloads__\`
+`C:\Users\<user>\Documents\__downloads__\`
 
 ## Workflow
 
@@ -111,7 +111,7 @@ Rules:
 - Drop weekday/timezone noise. Date is the **statement/issue date**, not download date.
 - Do **not** use the patient/holder Date Of Birth as the document date (known pitfall: `Report_000977`).
 
-## Folder taxonomy (under `C:\Users\ozamo\OneDrive\Documents\`)
+## Folder taxonomy (under `C:\Users\<user>\Documents\`)
 
 | Category | Destination pattern |
 |---|---|
@@ -125,7 +125,7 @@ Rules:
 | `Tax Returns` | `Tax Returns\{Year} Tax Return Related Documents` or `Tax Returns\Forms` |
 | `Health Statements & Results` | `HSA & FSA Transactions\{Year}` (**default for ALL health docs** — clinic bills, dental, EOBs, etc.) |
 | `Auto loan payments (NMAC)` | `Bills\NMAC\{Year}` |
-| `Conservice utility bills (FamilyMemberA's apt)` | `FamilyMemberA\Lease\{Year}` |
+| `Conservice utility bills (Family Member A apartment)` | `Family Member A\Lease\{Year}` |
 | `Insurance` | `Insurance\{Year}` |
 | `Receipts` | `Receipts, Payment, Warranty` |
 | `Notices` (employer/HR) | `Careers\{Employer}` (e.g. `Careers\DTCC`) |
@@ -135,10 +135,10 @@ Rules:
 | Auto docs | `Auto Documentation\{Year} {Make} {Model}\{Sub-topic}` |
 
 Person-scoped routing (override above when the doc clearly belongs to one person):
-- **FamilyMemberA** → `FamilyMemberA\__Expenses__` (her cards, tickets, etc.)
-- **FamilyMemberB** → `FamilyMemberB\` (his health, school, contact lens)
-- **OwnerB** → `OwnerB\`
-- Credit cards in her name embed `(B)` in the issuer suffix.
+- **Family Member A** → `Family Member A\__Expenses__` (cards, tickets, etc.)
+- **Family Member B** → `Family Member B\` (health, school, contact lens)
+- **Family Member C** → `Family Member C\`
+- Credit cards in a family member name can embed a short owner marker in the issuer suffix.
 
 Closed/inactive issuers go under `_ Closed Accounts _\` inside each category folder.
 
@@ -146,7 +146,7 @@ Closed/inactive issuers go under `_ Closed Accounts _\` inside each category fol
 
 - **FPL Electric** — autopay account; never include a payment prompt or "amount due" note. Route to `Bills\FPL\{Year}`.
 - **All health documents** (EOBs, clinic statements, dental, vision, prescriptions) → default destination is `HSA & FSA Transactions\{Year}`, **not** `Health Statements & Results`. Always flag whether the patient balance is **still owed** and ask the user if the file should stay in `__downloads__` until paid.
-- **Conservice utility bills** (The Renegade, Tallahassee — FamilyMemberA's apartment, Account 43480899) → `FamilyMemberA\Lease\{Year}`, not Bills. Naming: `YYYY.MM - Conservice Utilities FamilyMemberA - $amount.pdf`. The statement date is the billing date; the due date is one month later.
+- **Conservice utility bills** (The Renegade, Tallahassee — Family Member A apartment, Account 43480899) → `Family Member A\Lease\{Year}`, not Bills. Naming: `YYYY.MM - Conservice Utilities Family Member A - $amount.pdf`. The statement date is the billing date; the due date is one month later.
 - **NMAC / Nissan Motor Acceptance Company** auto loan payments → `Bills\NMAC\{Year}`. Naming: `YYYY.MM – Nissan Auto Loan (Acct 2207) – $amount.pdf` (em-dashes to match existing files).
 - **Rental Expenses** — always include the amount in the filename: `YYYY.MM.DD - {Vendor} - ${amount}.pdf`. Never omit amount even if the receipt looks blank; check carefully.
 - **Temp / junk** (vendor support pages, unrelated political files) → propose `DELETED` in the destination column.
