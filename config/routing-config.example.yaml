@@ -148,3 +148,11 @@ manifest:
     - ocr_confidence
     - routed_to
     - timestamp
+
+# Learning / feedback log (L1)
+# Every confirmed, skipped, and rule-added decision is appended here as JSONL.
+# It feeds future learning layers (YAML auto-tune, embeddings, LLM few-shot).
+# Override location with OCR_FEEDBACK_LOG env var, or set feedback.path below.
+# Default: <output_dir>/_feedback/corrections.jsonl
+feedback:
+  # path: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\corrections.jsonl"

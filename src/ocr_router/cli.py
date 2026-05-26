@@ -18,6 +18,7 @@ from rich.panel import Panel
 
 from ocr_router.config import load_config, get_config_from_env
 from ocr_router.extractor import PdfTextExtractor, MetadataExtractor
+from ocr_router.feedback import FeedbackLog, FeedbackRecord
 from ocr_router.folder_resolver import FolderResolver
 from ocr_router.manifest import ManifestWriter, ManifestEntry
 from ocr_router.ocr_engine import OcrEngine
@@ -93,6 +94,7 @@ def process(input: str, output: str, config: str, max_files: int,
         router     = DocumentRouter(cfg.model_dump())
         resolver   = FolderResolver(output_dir)
         manifest_writer = ManifestWriter(output_dir, cfg.model_dump())
+        feedback_log = FeedbackLog(_feedback_log_path(output_dir, cfg.model_dump()))
 
         if not skip_ocr and not ocr_engine.is_available():
             console.print(f"[yellow]⚠  PDF24 not found — proceeding text-only (--skip-ocr)[/]")
@@ -190,7 +192,9 @@ def process(input: str, output: str, config: str, max_files: int,
             if action_mode is None:
                 console.print("[yellow]Aborted.[/]")
                 return
-            approved_indices = _interactive_confirm(proposals, config)
+            approved_indices = _interactive_confirm(
+                proposals, config, output_dir, feedback_log
+            )
             if approved_indices is None:   # user quit
                 console.print("[yellow]Aborted.[/]")
                 return
@@ -206,6 +210,20 @@ def process(input: str, output: str, config: str, max_files: int,
         for p in proposals:
             if p.index not in approved_indices:
                 skipped += 1
+                # Capture skip for future learning (best-effort, never raises)
+                try:
+                    feedback_log.append(FeedbackRecord.from_proposal(
+                        event="skipped",
+                        original_filename=p.pdf_file.name,
+                        text=p.text,
+                        proposal_meta=p.metadata,
+                        proposed_folder=_safe_relpath(p.dest_dir, output_dir),
+                        proposed_filename=p.new_filename,
+                        proposed_confidence=p.confidence,
+                        backend="keyword",
+                    ))
+                except Exception:                                    # pragma: no cover
+                    pass
                 continue
             try:
                 # Use the OCR'd file if OCR was performed, otherwise the original
@@ -245,6 +263,30 @@ def process(input: str, output: str, config: str, max_files: int,
                     status='success',
                 )
                 manifest_writer.append_entry(entry)
+                # Capture confirmation for future learning (best-effort)
+                try:
+                    final_folder = (
+                        _safe_relpath(p.dest_file.parent, output_dir)
+                        if action_mode == "move"
+                        else str(p.dest_file.parent)
+                    )
+                    feedback_log.append(FeedbackRecord.from_proposal(
+                        event="confirmed",
+                        original_filename=p.pdf_file.name,
+                        text=p.text,
+                        proposal_meta=p.metadata,
+                        proposed_folder=_safe_relpath(p.dest_dir, output_dir),
+                        proposed_filename=p.new_filename,
+                        proposed_confidence=p.confidence,
+                        final_category=p.category,
+                        final_issuer=p.metadata.get("issuer"),
+                        final_folder=final_folder,
+                        final_filename=p.dest_file.name,
+                        backend="keyword",
+                        extra={"action_mode": action_mode},
+                    ))
+                except Exception:                                    # pragma: no cover
+                    pass
                 moved += 1
             except Exception as e:
                 console.print(f"[red]Error moving {p.pdf_file.name}: {e}[/]")
@@ -342,7 +384,12 @@ def _ask_action_mode() -> Optional[str]:
     return 'move'
 
 
-def _interactive_confirm(proposals: list[Proposal], config_path: str) -> Optional[set[int]]:
+def _interactive_confirm(
+    proposals: list[Proposal],
+    config_path: str,
+    output_dir: Path,
+    feedback_log: "FeedbackLog",
+) -> Optional[set[int]]:
     """Ask which files to move, collect rules for skipped ones.
 
     Returns a set of approved indices, or None if the user quits.
@@ -378,13 +425,24 @@ def _interactive_confirm(proposals: list[Proposal], config_path: str) -> Optiona
         _collect_rules_for_skipped(
             [p for p in proposals if p.index in skipped],
             config_path,
+            output_dir,
+            feedback_log,
         )
 
     return approved
 
 
-def _collect_rules_for_skipped(skipped: list[Proposal], config_path: str) -> None:
-    """For each skipped file, optionally collect a new rule and append it to config."""
+def _collect_rules_for_skipped(
+    skipped: list[Proposal],
+    config_path: str,
+    output_dir: Path,
+    feedback_log: "FeedbackLog",
+) -> None:
+    """For each skipped file, optionally collect a new rule and append it to config.
+
+    Also writes a ``rule_added`` feedback record so future learning passes can
+    cross-reference YAML edits against the documents that motivated them.
+    """
     console.print("\n[bold]For each skipped file you can add a rule to improve future runs.[/]")
     console.print("[dim]Examples:  issuer=FPL  |  category=Bills  |  skip  |  (blank = nothing)[/]\n")
 
@@ -405,6 +463,21 @@ def _collect_rules_for_skipped(skipped: list[Proposal], config_path: str) -> Non
             stem = Path(p.pdf_file.name).stem.lower()
             new_issuers[stem] = val
             console.print(f"  [green]✓ Will add issuer rule: {stem!r} → {val!r}[/]")
+            try:
+                feedback_log.append(FeedbackRecord.from_proposal(
+                    event="rule_added",
+                    original_filename=p.pdf_file.name,
+                    text=p.text,
+                    proposal_meta=p.metadata,
+                    proposed_folder=_safe_relpath(p.dest_dir, output_dir),
+                    proposed_filename=p.new_filename,
+                    proposed_confidence=p.confidence,
+                    final_issuer=val,
+                    backend="keyword",
+                    extra={"rule_kind": "issuer", "stem": stem},
+                ))
+            except Exception:                                        # pragma: no cover
+                pass
 
         elif rule.lower().startswith('category='):
             val = rule.split('=', 1)[1].strip()
@@ -412,6 +485,21 @@ def _collect_rules_for_skipped(skipped: list[Proposal], config_path: str) -> Non
             kw = Path(p.pdf_file.name).stem.lower().replace('-', ' ').replace('_', ' ')
             new_keywords.setdefault(val, []).append(kw)
             console.print(f"  [green]✓ Will add keyword {kw!r} to category {val!r}[/]")
+            try:
+                feedback_log.append(FeedbackRecord.from_proposal(
+                    event="rule_added",
+                    original_filename=p.pdf_file.name,
+                    text=p.text,
+                    proposal_meta=p.metadata,
+                    proposed_folder=_safe_relpath(p.dest_dir, output_dir),
+                    proposed_filename=p.new_filename,
+                    proposed_confidence=p.confidence,
+                    final_category=val,
+                    backend="keyword",
+                    extra={"rule_kind": "category", "keyword": kw},
+                ))
+            except Exception:                                        # pragma: no cover
+                pass
 
         else:
             console.print(f"  [dim]Unrecognised format — skipped[/]")
@@ -460,6 +548,32 @@ def _resolve_collision(dest_dir: Path, filename: str) -> Path:
         candidate = dest_dir / f"{stem} - {counter}{suffix}"
         counter += 1
     return candidate
+
+
+def _safe_relpath(path: Path, base: Path) -> str:
+    """Return ``path`` relative to ``base`` as a string, or absolute string on failure."""
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
+
+
+def _feedback_log_path(output_dir: Path, config: dict) -> Path:
+    """Resolve where to write the feedback JSONL log.
+
+    Order of precedence:
+      1. ``OCR_FEEDBACK_LOG`` environment variable
+      2. ``feedback.path`` in routing config
+      3. ``<output_dir>/_feedback/corrections.jsonl`` (default)
+    """
+    import os
+    env = os.environ.get("OCR_FEEDBACK_LOG")
+    if env:
+        return Path(env)
+    cfg_path = (config or {}).get("feedback", {}).get("path")
+    if cfg_path:
+        return Path(cfg_path)
+    return output_dir / "_feedback" / "corrections.jsonl"
 
 
 def _now_str() -> str:
@@ -608,6 +722,147 @@ def review(manifest: str):
             entry.get('date',     '')[:10],
         )
     console.print(t)
+
+
+# ── Feedback commands (L1: append-only learning log) ─────────────────────────
+
+@cli.group()
+def feedback():
+    """Inspect and manage the learning feedback log."""
+    pass
+
+
+def _resolve_feedback_path(output: Optional[str], config: Optional[str]) -> Path:
+    """Mirror of process()'s log path resolution for feedback subcommands."""
+    import os
+    env = os.environ.get("OCR_FEEDBACK_LOG")
+    if env:
+        return Path(env)
+    cfg_dict: dict = {}
+    if config:
+        try:
+            cfg_dict = load_config(config).model_dump()
+        except Exception:
+            cfg_dict = {}
+    cfg_path = (cfg_dict or {}).get("feedback", {}).get("path")
+    if cfg_path:
+        return Path(cfg_path)
+    if output:
+        return Path(output) / "_feedback" / "corrections.jsonl"
+    raise click.UsageError(
+        "Cannot resolve feedback log path. "
+        "Set OCR_FEEDBACK_LOG, or pass --output, or set feedback.path in config."
+    )
+
+
+@feedback.command("stats")
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root used during process (used to locate _feedback/).")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env,
+              help="Config YAML path (read feedback.path if set).")
+def feedback_stats(output: Optional[str], config: Optional[str]):
+    """Show counts of confirmed / corrected / skipped / rule_added records."""
+    path = _resolve_feedback_path(output, config)
+    log = FeedbackLog(path)
+    s = log.stats()
+
+    if s["total"] == 0:
+        console.print(f"[yellow]No feedback records yet at: {path}[/]")
+        return
+
+    console.print(f"\n[bold]Feedback log:[/] [cyan]{s['path']}[/]")
+    console.print(f"[bold]Total records:[/] {s['total']}\n")
+
+    t = Table(title="By event", box=box.ROUNDED)
+    t.add_column("Event", style="cyan")
+    t.add_column("Count", style="green", justify="right")
+    for ev, n in sorted(s["by_event"].items(), key=lambda kv: -kv[1]):
+        t.add_row(ev, str(n))
+    console.print(t)
+
+    t = Table(title="By category", box=box.ROUNDED)
+    t.add_column("Category", style="cyan")
+    t.add_column("Count", style="green", justify="right")
+    for cat, n in sorted(s["by_category"].items(), key=lambda kv: -kv[1])[:15]:
+        t.add_row(cat, str(n))
+    console.print(t)
+
+    t = Table(title="By backend", box=box.ROUNDED)
+    t.add_column("Backend", style="cyan")
+    t.add_column("Count", style="green", justify="right")
+    for be, n in sorted(s["by_backend"].items(), key=lambda kv: -kv[1]):
+        t.add_row(be, str(n))
+    console.print(t)
+
+
+@feedback.command("show")
+@click.option("--output", type=click.Path(), default=None)
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+@click.option("--limit", type=int, default=20, help="How many of the most recent records to show.")
+@click.option("--event", type=click.Choice(["confirmed", "corrected", "skipped", "rule_added"]),
+              default=None, help="Filter by event type.")
+def feedback_show(output: Optional[str], config: Optional[str],
+                  limit: int, event: Optional[str]):
+    """List the most recent feedback records."""
+    path = _resolve_feedback_path(output, config)
+    log = FeedbackLog(path)
+
+    records = list(log.iter_records())
+    if event:
+        records = [r for r in records if r.get("event") == event]
+    records = records[-limit:]
+
+    if not records:
+        console.print(f"[yellow]No matching records in: {path}[/]")
+        return
+
+    t = Table(title=f"Last {len(records)} feedback record(s)", box=box.ROUNDED, show_lines=False)
+    t.add_column("When", style="dim", width=19)
+    t.add_column("Event", style="cyan", width=11)
+    t.add_column("File", style="white", width=28, no_wrap=True)
+    t.add_column("Category", style="green", width=22)
+    t.add_column("Issuer", style="yellow", width=18)
+    t.add_column("Backend", style="magenta", width=14)
+
+    for r in records:
+        ts = (r.get("ts") or "")[:19]
+        cat = r.get("final_category") or r.get("proposed_category") or "—"
+        iss = r.get("final_issuer") or r.get("proposed_issuer") or "—"
+        t.add_row(
+            ts,
+            r.get("event", "—"),
+            (r.get("original_filename") or "—")[:28],
+            cat[:22],
+            iss[:18],
+            r.get("backend", "—")[:14],
+        )
+    console.print(t)
+
+
+@feedback.command("export")
+@click.option("--output", type=click.Path(), default=None)
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+@click.option("--to", "to_path", type=click.Path(), required=True,
+              help="Destination file (.jsonl or .json).")
+def feedback_export(output: Optional[str], config: Optional[str], to_path: str):
+    """Copy the feedback log to a chosen path (JSONL pass-through, or JSON array)."""
+    src = _resolve_feedback_path(output, config)
+    if not src.exists():
+        console.print(f"[yellow]Nothing to export — no log at {src}[/]")
+        return
+
+    dest = Path(to_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest.suffix.lower() == ".json":
+        import json as _json
+        records = list(FeedbackLog(src).iter_records())
+        dest.write_text(_json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        # Pass-through copy preserves JSONL format
+        shutil.copy2(src, dest)
+
+    console.print(f"[green]✓ Exported to {dest}[/]")
 
 
 if __name__ == '__main__':
