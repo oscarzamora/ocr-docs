@@ -156,3 +156,9 @@ manifest:
 # Default: <output_dir>/_feedback/corrections.jsonl
 feedback:
   # path: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\corrections.jsonl"
+
+  # SQLite embedding store (L3). Populated incrementally by
+  # `ocr-router feedback embed`. Override location with OCR_EMBEDDINGS_DB env
+  # var, or set feedback.embeddings_db below.
+  # Default: sibling of the feedback log -> <feedback_dir>/examples.sqlite
+  # embeddings_db: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\examples.sqlite"

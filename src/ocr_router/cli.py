@@ -1082,5 +1082,182 @@ def _print_bootstrap_summary(stats) -> None:
             console.print(f"  • {e}")
 
 
+# ── Embedding store path resolution (L3) ─────────────────────────────────────
+
+def _resolve_embed_db_path(output: Optional[str], config: Optional[str]) -> Path:
+    """Resolve where to store the SQLite embedding DB.
+
+    Order of precedence:
+      1. ``OCR_EMBEDDINGS_DB`` env var
+      2. ``feedback.embeddings_db`` in routing config
+      3. Sibling of the feedback log: ``<feedback_dir>/examples.sqlite``
+    """
+    import os as _os
+    env = _os.environ.get("OCR_EMBEDDINGS_DB")
+    if env:
+        return Path(env)
+    cfg_dict: dict = {}
+    if config:
+        try:
+            cfg_dict = load_config(config).model_dump()
+        except Exception:
+            cfg_dict = {}
+    cfg_path = (cfg_dict or {}).get("feedback", {}).get("embeddings_db")
+    if cfg_path:
+        return Path(cfg_path)
+    log_path = _resolve_feedback_path(output, config)
+    return log_path.parent / "examples.sqlite"
+
+
+@feedback.command("embed")
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root (used to locate _feedback/).")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env,
+              help="Config YAML path (read feedback.embeddings_db if set).")
+@click.option("--model", default=None,
+              help="Ollama embed model (default: nomic-embed-text).")
+@click.option("--host", default=None, help="Ollama host (default: localhost).")
+def feedback_embed(output: Optional[str], config: Optional[str],
+                   model: Optional[str], host: Optional[str]):
+    """Embed all new 'confirmed' records from the log into the SQLite store."""
+    from ocr_router.feedback import (
+        EmbeddingStore, OllamaEmbedder, OllamaUnavailable,
+        index_log_into_store, DEFAULT_EMBED_MODEL,
+    )
+
+    log_path = _resolve_feedback_path(output, config)
+    db_path = _resolve_embed_db_path(output, config)
+
+    log = FeedbackLog(log_path)
+    if log.stats()["total"] == 0:
+        console.print(f"[yellow]No records to embed at: {log_path}[/]")
+        return
+
+    embedder = OllamaEmbedder(model=model or DEFAULT_EMBED_MODEL, host=host)
+    # Probe Ollama once up-front so we don't spam errors per-record
+    try:
+        embedder.embed("ocr-router connectivity probe")
+    except OllamaUnavailable as exc:
+        console.print(f"[red]Ollama unavailable: {exc}[/]")
+        console.print("[dim]Hint: is `ollama serve` running? Did you `ollama pull "
+                      f"{embedder.model}`?[/]")
+        return
+
+    store = EmbeddingStore(db_path)
+
+    console.print(f"[bold cyan]Embedding records into {db_path}…[/]")
+    console.print(f"  Model: [dim]{embedder.model}[/]")
+    console.print(f"  Log:   [dim]{log_path}[/]")
+
+    records = list(log.iter_records())
+    with Progress(transient=False) as prog:
+        task = prog.add_task("Embedding…", total=len(records))
+
+        def _cb(i, total):
+            prog.update(task, completed=i,
+                        description=f"[cyan]Embedding…[/] {i}/{total}")
+
+        stats = index_log_into_store(records, store, embedder, progress_cb=_cb)
+
+    t = Table(title="Embed summary", box=box.ROUNDED)
+    t.add_column("Metric", style="cyan")
+    t.add_column("Count", style="green", justify="right")
+    t.add_row("Seen",                     str(stats.seen))
+    t.add_row("Skipped (not confirmed)",  str(stats.skipped_event))
+    t.add_row("Skipped (empty text)",     str(stats.skipped_empty))
+    t.add_row("Skipped (already in DB)",  str(stats.skipped_existing))
+    t.add_row("Embedded",                 str(stats.embedded))
+    t.add_row("Errors",                   str(stats.errors))
+    console.print(t)
+
+    db_stats = store.stats()
+    console.print(f"\n[bold]Store now has {db_stats.total} records "
+                  f"({db_stats.dim}-dim, model={db_stats.embed_model!r}).[/]")
+    store.close()
+
+
+@feedback.command("embed-stats")
+@click.option("--output", type=click.Path(), default=None)
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+def feedback_embed_stats(output: Optional[str], config: Optional[str]):
+    """Show what's in the embedding store."""
+    from ocr_router.feedback import EmbeddingStore
+
+    db_path = _resolve_embed_db_path(output, config)
+    if not db_path.exists():
+        console.print(f"[yellow]No embedding store at {db_path}[/]")
+        return
+
+    store = EmbeddingStore(db_path)
+    s = store.stats()
+    console.print(f"[bold]Embedding store:[/] [cyan]{db_path}[/]")
+    console.print(f"[bold]Total:[/] {s.total}  [bold]Dim:[/] {s.dim}  "
+                  f"[bold]Model:[/] {s.embed_model}\n")
+
+    t = Table(title="By category", box=box.ROUNDED)
+    t.add_column("Category", style="cyan")
+    t.add_column("Count", style="green", justify="right")
+    for cat, n in list(s.by_category.items())[:20]:
+        t.add_row(cat, str(n))
+    console.print(t)
+    store.close()
+
+
+@feedback.command("search")
+@click.argument("query")
+@click.option("--output", type=click.Path(), default=None)
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+@click.option("--model", default=None, help="Ollama embed model (default: nomic-embed-text).")
+@click.option("--host", default=None)
+@click.option("--k", type=int, default=5, help="Number of neighbors to return.")
+@click.option("--category", default=None,
+              help="Restrict search to one category (e.g. 'Bills').")
+def feedback_search(query: str, output: Optional[str], config: Optional[str],
+                    model: Optional[str], host: Optional[str], k: int,
+                    category: Optional[str]):
+    """Find the k most-similar past decisions to a query string."""
+    from ocr_router.feedback import (
+        EmbeddingStore, OllamaEmbedder, OllamaUnavailable, DEFAULT_EMBED_MODEL,
+    )
+
+    db_path = _resolve_embed_db_path(output, config)
+    if not db_path.exists():
+        console.print(f"[yellow]No embedding store at {db_path}. "
+                      "Run `feedback embed` first.[/]")
+        return
+
+    embedder = OllamaEmbedder(model=model or DEFAULT_EMBED_MODEL, host=host)
+    try:
+        qv = embedder.embed(query)
+    except OllamaUnavailable as exc:
+        console.print(f"[red]Ollama unavailable: {exc}[/]")
+        return
+
+    store = EmbeddingStore(db_path)
+    neighbors = store.search(qv, k=k, category=category)
+    if not neighbors:
+        console.print("[yellow]No results.[/]")
+        store.close()
+        return
+
+    t = Table(title=f"Top {len(neighbors)} matches for: {query!r}",
+              box=box.ROUNDED, show_lines=False)
+    t.add_column("Score",   style="magenta", width=6, justify="right")
+    t.add_column("Category", style="green",   width=24)
+    t.add_column("Issuer",   style="yellow",  width=24)
+    t.add_column("File",     style="cyan",    width=40, no_wrap=True)
+    t.add_column("Folder",   style="blue",    width=40)
+    for n in neighbors:
+        t.add_row(
+            f"{n.score:.3f}",
+            (n.category or "—")[:24],
+            (n.issuer or "—")[:24],
+            (n.final_filename or n.original_filename)[:40],
+            (n.folder or "—")[:40],
+        )
+    console.print(t)
+    store.close()
+
+
 if __name__ == '__main__':
     cli()

@@ -22,6 +22,16 @@ from ocr_router.feedback.bootstrap import (
     parse_processed_history,
     parse_processed_history_paths,
 )
+from ocr_router.feedback.store import (
+    DEFAULT_EMBED_MODEL,
+    EmbeddingStore,
+    EmbedStats,
+    IndexStats,
+    Neighbor,
+    OllamaEmbedder,
+    OllamaUnavailable,
+    index_log_into_store,
+)
 
 __all__ = [
     "FeedbackLog",
@@ -35,4 +45,12 @@ __all__ = [
     "infer_label_from_path",
     "parse_processed_history",
     "parse_processed_history_paths",
+    "DEFAULT_EMBED_MODEL",
+    "EmbeddingStore",
+    "EmbedStats",
+    "IndexStats",
+    "Neighbor",
+    "OllamaEmbedder",
+    "OllamaUnavailable",
+    "index_log_into_store",
 ]
