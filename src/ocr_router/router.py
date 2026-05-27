@@ -54,10 +54,17 @@ class DocumentRouter:
             return "Tax Returns\\Forms"
 
         # CC/Bank contracts (no amount, contrato/contract keyword) → issuer root, no year
-        is_contract = category in (
-            "Credit Card Statements",
-            "Bank Account & Statements",
-        ) and not metadata.get("amount")
+        # A real zero-balance statement (extractor set ``amount_zero=True``
+        # because it matched a labelled ``0.00``) is NOT a contract — it's a
+        # regular monthly statement that happens to net to zero (e.g. dormant
+        # Interbank AMEX Gold with `Pago del Mes = S/ 0.00`). Without this
+        # check the file would be renamed `... Contract.pdf` and routed to
+        # the issuer root instead of the year folder.
+        is_contract = (
+            category in ("Credit Card Statements", "Bank Account & Statements")
+            and not metadata.get("amount")
+            and not metadata.get("amount_zero")
+        )
         if is_contract:
             issuer_seg = metadata.get("issuer") or "Unknown"
             template = self.route_templates.get(
@@ -121,10 +128,17 @@ class DocumentRouter:
         doc_types: dict[str, str] = self.config.get("doc_types", {})
 
         # Contracts: no amount + CC/Bank → override doc type, force dated (not monthly) format
-        is_contract = category in (
-            "Credit Card Statements",
-            "Bank Account & Statements",
-        ) and not metadata.get("amount")
+        # A real zero-balance statement (extractor set ``amount_zero=True``
+        # because it matched a labelled ``0.00``) is NOT a contract — it's a
+        # regular monthly statement that happens to net to zero (e.g. dormant
+        # Interbank AMEX Gold with `Pago del Mes = S/ 0.00`). Without this
+        # check the file would be renamed `... Contract.pdf` and routed to
+        # the issuer root instead of the year folder.
+        is_contract = (
+            category in ("Credit Card Statements", "Bank Account & Statements")
+            and not metadata.get("amount")
+            and not metadata.get("amount_zero")
+        )
         effective_doc_type = "Contract" if is_contract else doc_types.get(category, "")
         effective_monthly = monthly_cats - (
             {"Credit Card Statements", "Bank Account & Statements"} if is_contract else set()
@@ -173,7 +187,13 @@ class DocumentRouter:
         currency = metadata.get("currency", "$")
         if raw_amount and category not in no_amount_cats:
             try:
-                amount_part = f"{currency}{float(raw_amount):.2f}"
+                amount_value = float(raw_amount)
+                # Zero-balance statements (e.g. dormant Interbank AMEX Gold
+                # with `Pago del Mes = S/ 0.00`) get NO amount suffix — match
+                # the existing `(Last4 0234)` filing convention where only
+                # non-zero-balance months carry an amount in the filename.
+                if amount_value > 0:
+                    amount_part = f"{currency}{amount_value:.2f}"
             except (ValueError, TypeError):
                 pass
 

@@ -17,10 +17,17 @@ _MONTH_NAMES: dict[str, int] = {
 }
 
 _DEFAULT_AMOUNT_LABELS = [
+    # Most-specific labels first; lone 'total' deliberately omitted because it
+    # matches column headers like 'Redondeo Total' in Interbank/Peruvian
+    # statements and grabs the next bare digit (root cause of the 2026-05-26
+    # incident where 6 zero-balance statements got labelled with stray '980').
     'total amount due', 'amount due', 'total due',
     'inv total', 'invoice total',
     'new balance', 'statement balance', 'balance due',
-    'payment due', 'net pay', 'total',
+    'payment due', 'net pay',
+    # Spanish (Peruvian) statement labels — match only labelled values, never
+    # the bare 'total' column header.
+    'pago del mes', 'deuda total', 'monto a pagar', 'total a pagar',
 ]
 
 # Amounts below this value are likely noise (line-item numbers mistaken for $)
@@ -47,10 +54,17 @@ class MetadataExtractor:
         # Track whether date came from year-only fallback (stored as YYYY-01-01)
         date_year_only = bool(date and date.endswith('-01-01') and
                               not re.search(r'january\s+1|jan\.?\s+1\b|1/1/', text.lower()))
+        amount, amount_zero = self._extract_amount_with_zero_flag(text)
         return {
             'date': date,
             'date_year_only': date_year_only,
-            'amount': self._extract_amount(text),
+            'amount': amount,
+            # True iff a labelled amount of 0.00 was found (zero-balance
+            # statement) — distinguishes "real zero" from "no labelled
+            # amount found at all", which the router uses to avoid
+            # mistakenly classifying a zero-balance CC/Bank statement as
+            # a contract.
+            'amount_zero': amount_zero,
             'currency': self._extract_currency(text),
             'account': account_info['value'],
             'account_masked': account_info['masked'],
@@ -234,8 +248,36 @@ class MetadataExtractor:
             return False
 
     def _extract_amount(self, text: str) -> Optional[str]:
-        """Extract monetary amount, preferring labeled totals over bare dollar signs."""
+        """Back-compat wrapper returning only the amount string."""
+        amount, _ = self._extract_amount_with_zero_flag(text)
+        return amount
+
+    def _extract_amount_with_zero_flag(self, text: str) -> tuple[Optional[str], bool]:
+        r"""Extract monetary amount, preferring labeled totals over bare dollar signs.
+
+        Two-pass labelled extraction, then a bare-currency fallback:
+
+        1. **Strict pass** — original behaviour: ``label[:\s]* currency? amount``.
+           Catches US-style ``Statement Balance: $1,234.56`` directly.
+        2. **Loose pass** — ``label .{0,150}? [=:] currency? amount`` (DOTALL).
+           Handles structured PDFs where the labelled value sits after
+           an ``=`` and intervening text, e.g. Peruvian Interbank statements:
+           ``PAGO DEL MES (Suma de subtotales) ----- = 0.00 0.00``.
+        3. **Labelled-zero short circuit** — if either pass found a label
+           with value ``0.00`` (a real zero-balance statement) we return
+           ``None`` instead of falling through to the bare-currency
+           fallback. Otherwise the fallback would grab the first
+           ``S/ 2,800.00`` it sees (the credit-line value) and produce a
+           wildly wrong amount in the filename. The router drops zero
+           amounts from filenames anyway, so ``None`` here yields the
+           same correct outcome.
+        4. **Bare fallback** — first ``$|S/`` amount with cents,
+           validated by ``_is_valid_amount``.
+        """
         labels = self.extraction_patterns.get('amount_labels', _DEFAULT_AMOUNT_LABELS)
+        labelled_zero = False
+
+        # Pass 1: strict labelled match (back-compat).
         for label in labels:
             pattern = re.compile(
                 re.escape(label) + r'[:\s]*(?:\$|S/\.?|€|£)?\s*([\d,]+(?:\.\d{1,2})?)',
@@ -245,15 +287,54 @@ class MetadataExtractor:
             if m:
                 raw = m.group(1).replace(',', '')
                 if self._is_valid_amount(raw):
-                    return raw
+                    return raw, False
+                try:
+                    if float(raw) == 0:
+                        labelled_zero = True
+                except ValueError:
+                    pass
 
-        # Fallback: first dollar OR soles amount that includes cents
+        # Pre-collapse very long runs of separator chars (dashes / equals /
+        # underscores / dots) so the loose pattern's 150-char cap can hop
+        # over the formatting noise typical in structured Spanish
+        # statements (e.g. ``PAGO DEL MES (Suma de subtotales) ----...----- = 0.00``
+        # has ~100 dashes between the label and the value).
+        text_norm = re.sub(r'([-=_.])\1{2,}', r'\1', text)
+        # Collapse runs of whitespace too — Interbank PDFs print 'PAGO  DEL MES'
+        # (double space) which would defeat a single-space label match.
+        text_norm = re.sub(r'\s+', ' ', text_norm)
+
+        # Pass 2: loose labelled match — allow up to 150 chars between the
+        # label and a ``= amount`` (or ``: amount``) anchor on the normalised
+        # text. Catches ``PAGO DEL MES (Suma de subtotales) - = 0.00`` style.
+        for label in labels:
+            pattern = re.compile(
+                re.escape(label) + r'.{0,150}?[=:]\s*(?:\$|S/\.?|€|£)?\s*([\d,]+(?:\.\d{1,2})?)',
+                re.IGNORECASE | re.DOTALL,
+            )
+            m = pattern.search(text_norm)
+            if m:
+                raw = m.group(1).replace(',', '')
+                if self._is_valid_amount(raw):
+                    return raw, False
+                try:
+                    if float(raw) == 0:
+                        labelled_zero = True
+                except ValueError:
+                    pass
+
+        # Labelled zero-balance: skip the bare fallback so we don't grab
+        # an unrelated currency value (e.g. credit line).
+        if labelled_zero:
+            return None, True
+
+        # Fallback: first dollar OR soles amount that includes cents.
         m = re.search(r'(?:\$|S/\.?)\s*([\d,]+\.\d{2})', text)
         if m:
             raw = m.group(1).replace(',', '')
             if self._is_valid_amount(raw):
-                return raw
-        return None
+                return raw, False
+        return None, False
 
     # ------------------------------------------------------------------
     # Account extraction
