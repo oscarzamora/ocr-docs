@@ -61,6 +61,7 @@ class FeedbackRecord:
     # Diagnostics -------------------------------------------------------------
     backend: str = "keyword"         # keyword | llm:local | llm:cloud:<provider>
     schema_version: int = SCHEMA_VERSION
+    note: str = ""                   # Free-form rationale from the user (e.g. "unpaid")
     extra: dict = field(default_factory=dict)
 
     def to_json_line(self) -> str:
@@ -83,12 +84,16 @@ class FeedbackRecord:
         final_folder: Optional[str] = None,
         final_filename: Optional[str] = None,
         backend: str = "keyword",
+        note: str = "",
         extra: Optional[dict] = None,
         text_excerpt_chars: int = DEFAULT_TEXT_EXCERPT_CHARS,
     ) -> "FeedbackRecord":
         """Build a record from the CLI's Proposal dataclass shape.
 
         ``proposal_meta`` is the ``Proposal.metadata`` dict.
+        ``note`` is an optional free-form rationale the user gave for the
+        action (e.g. "unpaid, surface for review when paid"). Stored
+        verbatim so future runs can grep / surface it.
         """
         return cls(
             event=event,
@@ -105,6 +110,7 @@ class FeedbackRecord:
             final_folder=final_folder,
             final_filename=final_filename,
             backend=backend,
+            note=(note or "").strip(),
             extra=extra or {},
         )
 

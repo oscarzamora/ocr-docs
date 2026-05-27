@@ -138,6 +138,23 @@ Accept these natural-language instructions:
 | `q` / `cancel` / `stop` | Stop without doing anything |
 | `show me what file N contains` | `ocr-router llm classify --file <path>` to inspect |
 
+### Interpreting free-form reasons
+
+Users often state a reason inline:
+
+- `skip 2 because I haven't paid yet` → upgrade to `park 2` (per routing
+  convention: unpaid CC/Bill statements stay parked)
+- `keep 7, it's a draft` → `park 7`
+- `4 should go under Luciana, not Credit Card Statements` → `park 4` and
+  surface the owner-namespace override in chat for confirmation when paid
+- `skip 5, the issuer is actually T-Mobile` → `skip 5` AND offer to add
+  `issuer=T-Mobile` so the local YAML learns the rule
+
+For every file the user gave a reason for, **remember the reason text
+verbatim** and pass it into the Notes block in Phase 5 (and, when
+available, into `--note "<reason>"` on the CLI for persistent storage).
+Quote the reason in your chat confirmation so the user sees you got it.
+
 ### Phase 4 — Execute
 
 Re-run the same command **without** `--dry-run`, with `--no-interactive`
@@ -148,6 +165,21 @@ moves, OCR, renaming, manifest write, and feedback log entry.
 
 Summarize what happened: "Moved 4 files, parked 1, skipped 0. Manifest
 at `<path>`. History appended to `PROCESSED_PDFS.md`."
+
+**Always append a `**Notes:**` block to the auto-written history section
+in `<input>/<YYYY.MM> - PROCESSED_PDFS.md` when any file was parked,
+skipped, or renamed with a stated reason.** Format:
+
+```markdown
+**Notes:**
+- File 2 (Fidelity Visa Luciana) — parked: unpaid, surface for review when paid
+- File 7 (911 Carrera T) — kept in place: working spec doc
+- File 5 — re-routed to Luciana\\Fidelity (owner override per user)
+```
+
+This is the user's grep-able paper trail. Without it, the reason is
+lost as soon as the chat closes. Use `Add-Content` (PowerShell) or
+`>>` (bash) — never rewrite earlier sections.
 
 If the user asked for any files to be **parked**, immediately verify:
 

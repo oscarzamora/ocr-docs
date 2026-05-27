@@ -282,6 +282,7 @@ def process(input: str, output: str, config: str, max_files: int,
         # ── Phase 3: interactive confirmation ────────────────────────────────
         approved_indices: set[int]
         parked_indices: set[int] = set()
+        session_note: str = ""
         action_mode = 'move'   # 'move' | 'rename'
         if interactive:
             action_mode = _ask_action_mode()
@@ -294,7 +295,7 @@ def process(input: str, output: str, config: str, max_files: int,
             if confirm_result is None:   # user quit
                 console.print("[yellow]Aborted.[/]")
                 return
-            approved_indices, parked_indices = confirm_result
+            approved_indices, parked_indices, session_note = confirm_result
         else:
             approved_indices = {p.index for p in proposals}
 
@@ -322,6 +323,7 @@ def process(input: str, output: str, config: str, max_files: int,
                         proposed_filename=p.new_filename,
                         proposed_confidence=p.confidence,
                         backend=p.backend_label,
+                        note=session_note,
                         extra={
                             "keyword_category": p.keyword_category,
                             "llm_category": p.llm_category,
@@ -631,7 +633,7 @@ def _interactive_confirm(
     config_path: str,
     output_dir: Path,
     feedback_log: "FeedbackLog",
-) -> Optional[tuple[set[int], set[int]]]:
+) -> Optional[tuple[set[int], set[int], str]]:
     """Ask which files to move, collect rules for skipped ones.
 
     Supported commands at the prompt:
@@ -642,10 +644,11 @@ def _interactive_confirm(
                       again on future runs (records as event='parked' in the log)
       q             — quit without moving anything
 
-    Returns ``(approved_indices, parked_indices)`` so the caller can avoid
-    writing a 'skipped' record for files that were actually parked
+    Returns ``(approved_indices, parked_indices, note)`` so the caller can
+    avoid writing a 'skipped' record for files that were actually parked
     (otherwise the latest-record-wins lookup in ``parked_filenames()``
-    silently loses the park). Returns ``None`` if the user quits.
+    silently loses the park). ``note`` carries any free-form rationale the
+    user appended with ``note: ...``. Returns ``None`` if the user quits.
     """
     console.print(Panel(
         "[bold]Review the table above.[/]\n\n"
@@ -653,6 +656,8 @@ def _interactive_confirm(
         "  [yellow]1,3,5[/]          → move ONLY those numbers\n"
         "  [yellow]skip 2,4[/]       → move all EXCEPT those numbers\n"
         "  [magenta]park 7[/]         → keep those files in place permanently (never re-propose)\n"
+        "  [dim]Append [italic]note: <reason>[/] to skip/park to capture rationale, e.g.\n"
+        "        [yellow]park 7 note: unpaid, surface when paid[/dim]\n"
         "  [red]q[/]              → quit without moving anything",
         title="What would you like to do?",
         border_style="cyan",
@@ -663,14 +668,29 @@ def _interactive_confirm(
     if raw.lower() == 'q':
         return None
 
+    # Allow an optional free-form rationale on park/skip:
+    #   "park 7 note: unpaid, surface when paid"
+    #   "skip 2,4 note: not mine"
+    # The note text is stored verbatim on each affected file's feedback record.
+    note_text = ""
+    # Case-insensitive split on ' note:' (with leading space so 'notebook'
+    # in a filename isn't matched).
+    _lower = raw.lower()
+    _note_idx = _lower.find(' note:')
+    if _note_idx != -1:
+        note_text = raw[_note_idx + len(' note:'):].strip()
+        raw = raw[:_note_idx].strip()
+
     all_indices = {p.index for p in proposals}
     parked_indices: set[int] = set()
+    skipped_note = ""
 
     if raw == '':
         approved = all_indices
     elif raw.lower().startswith('skip '):
         nums = _parse_nums(raw[5:])
         approved = all_indices - nums
+        skipped_note = note_text
     elif raw.lower().startswith('park '):
         parked_indices = _parse_nums(raw[5:]) & all_indices
         approved = all_indices - parked_indices
@@ -682,6 +702,7 @@ def _interactive_confirm(
             [p for p in proposals if p.index in parked_indices],
             output_dir,
             feedback_log,
+            note=note_text,
         )
 
     skipped = all_indices - approved - parked_indices
@@ -692,22 +713,26 @@ def _interactive_confirm(
             config_path,
             output_dir,
             feedback_log,
+            note=skipped_note,
         )
 
-    return approved, parked_indices
+    return approved, parked_indices, note_text
 
 
 def _record_parked(
     parked: list[Proposal],
     output_dir: Path,
     feedback_log: "FeedbackLog",
+    note: str = "",
 ) -> None:
     """Write a ``parked`` feedback record for each file kept in place.
 
     Best-effort: each append failure is swallowed so the pipeline keeps moving.
+    ``note`` (optional) is stored on every record produced for this batch.
     """
+    suffix = f' note=[dim]{note}[/]' if note else ''
     console.print(f"\n[magenta]Parking #{', '.join(str(p.index) for p in parked)} "
-                  f"— these files will not be re-proposed on future runs.[/]")
+                  f"— these files will not be re-proposed on future runs.{suffix}[/]")
     for p in parked:
         try:
             current_folder = _safe_relpath(p.pdf_file.parent, output_dir)
@@ -724,6 +749,7 @@ def _record_parked(
                 final_folder=current_folder,
                 final_filename=p.pdf_file.name,
                 backend=p.backend_label,
+                note=note,
                 extra={
                     "parked_at": current_folder,
                     "keyword_category": p.keyword_category,
@@ -740,11 +766,14 @@ def _collect_rules_for_skipped(
     config_path: str,
     output_dir: Path,
     feedback_log: "FeedbackLog",
+    note: str = "",
 ) -> None:
     """For each skipped file, optionally collect a new rule and append it to config.
 
     Also writes a ``rule_added`` feedback record so future learning passes can
     cross-reference YAML edits against the documents that motivated them.
+    ``note`` (optional) is the free-form rationale captured at the
+    top-level prompt (e.g. ``skip 2 note: not mine``).
     """
     console.print("\n[bold]For each skipped file you can add a rule to improve future runs.[/]")
     console.print("[dim]Examples:  issuer=FPL  |  category=Bills  |  skip  |  (blank = nothing)[/]\n")
@@ -1185,11 +1214,13 @@ def feedback_show(output: Optional[str], config: Optional[str],
     t.add_column("Category", style="green", width=22)
     t.add_column("Issuer", style="yellow", width=18)
     t.add_column("Backend", style="magenta", width=14)
+    t.add_column("Note", style="blue", width=30, no_wrap=False)
 
     for r in records:
         ts = (r.get("ts") or "")[:19]
         cat = r.get("final_category") or r.get("proposed_category") or "—"
         iss = r.get("final_issuer") or r.get("proposed_issuer") or "—"
+        note = (r.get("note") or "")
         t.add_row(
             ts,
             r.get("event", "—"),
@@ -1197,6 +1228,7 @@ def feedback_show(output: Optional[str], config: Optional[str],
             cat[:22],
             iss[:18],
             r.get("backend", "—")[:14],
+            note[:30] if note else "—",
         )
     console.print(t)
 
