@@ -131,8 +131,26 @@ def process(input: str, output: str, config: str, max_files: int,
         if not pdf_files:
             console.print("[yellow]No PDFs found.[/]")
             return
+
+        # ── Pre-filter: skip files the user previously marked as parked
+        # (Step 5.5). A "parked" file is one OCR'd in place that should never
+        # be re-proposed unless explicitly unparked.
+        parked = feedback_log.parked_filenames()
+        if parked:
+            parked_present = [p for p in pdf_files if p.name in parked]
+            if parked_present:
+                pdf_files = [p for p in pdf_files if p.name not in parked]
+                console.print(
+                    f"[dim]Skipping {len(parked_present)} parked file(s) "
+                    f"(use `ocr-router feedback parked list` to inspect).[/]"
+                )
+
         if max_files:
             pdf_files = pdf_files[:max_files]
+
+        if not pdf_files:
+            console.print("[yellow]No PDFs to process (all parked or filtered).[/]")
+            return
 
         # ── Phase 1: analyse every file ─────────────────────────────────────
         console.print(f"\n[bold cyan]Analysing {len(pdf_files)} PDF(s)…[/]")
@@ -589,6 +607,14 @@ def _interactive_confirm(
 ) -> Optional[set[int]]:
     """Ask which files to move, collect rules for skipped ones.
 
+    Supported commands at the prompt:
+      Enter         — move ALL files
+      1,3,5         — move ONLY those numbers
+      skip 2,4      — move all EXCEPT those numbers
+      park 7        — keep those files exactly where they are; never propose them
+                      again on future runs (records as event='parked' in the log)
+      q             — quit without moving anything
+
     Returns a set of approved indices, or None if the user quits.
     """
     console.print(Panel(
@@ -596,6 +622,7 @@ def _interactive_confirm(
         "  [green]Enter[/]          → move ALL files\n"
         "  [yellow]1,3,5[/]          → move ONLY those numbers\n"
         "  [yellow]skip 2,4[/]       → move all EXCEPT those numbers\n"
+        "  [magenta]park 7[/]         → keep those files in place permanently (never re-propose)\n"
         "  [red]q[/]              → quit without moving anything",
         title="What would you like to do?",
         border_style="cyan",
@@ -607,16 +634,27 @@ def _interactive_confirm(
         return None
 
     all_indices = {p.index for p in proposals}
+    parked_indices: set[int] = set()
 
     if raw == '':
         approved = all_indices
     elif raw.lower().startswith('skip '):
         nums = _parse_nums(raw[5:])
         approved = all_indices - nums
+    elif raw.lower().startswith('park '):
+        parked_indices = _parse_nums(raw[5:]) & all_indices
+        approved = all_indices - parked_indices
     else:
         approved = _parse_nums(raw)
 
-    skipped = all_indices - approved
+    if parked_indices:
+        _record_parked(
+            [p for p in proposals if p.index in parked_indices],
+            output_dir,
+            feedback_log,
+        )
+
+    skipped = all_indices - approved - parked_indices
     if skipped:
         console.print(f"\n[yellow]Skipping #{', '.join(str(n) for n in sorted(skipped))}[/]")
         _collect_rules_for_skipped(
@@ -627,6 +665,44 @@ def _interactive_confirm(
         )
 
     return approved
+
+
+def _record_parked(
+    parked: list[Proposal],
+    output_dir: Path,
+    feedback_log: "FeedbackLog",
+) -> None:
+    """Write a ``parked`` feedback record for each file kept in place.
+
+    Best-effort: each append failure is swallowed so the pipeline keeps moving.
+    """
+    console.print(f"\n[magenta]Parking #{', '.join(str(p.index) for p in parked)} "
+                  f"— these files will not be re-proposed on future runs.[/]")
+    for p in parked:
+        try:
+            current_folder = _safe_relpath(p.pdf_file.parent, output_dir)
+            feedback_log.append(FeedbackRecord.from_proposal(
+                event="parked",
+                original_filename=p.pdf_file.name,
+                text=p.text,
+                proposal_meta=p.metadata,
+                proposed_folder=_safe_relpath(p.dest_dir, output_dir),
+                proposed_filename=p.new_filename,
+                proposed_confidence=p.confidence,
+                final_category=p.category,
+                final_issuer=p.metadata.get("issuer"),
+                final_folder=current_folder,
+                final_filename=p.pdf_file.name,
+                backend=p.backend_label,
+                extra={
+                    "parked_at": current_folder,
+                    "keyword_category": p.keyword_category,
+                    "llm_category": p.llm_category,
+                    "llm_confidence": p.llm_confidence,
+                },
+            ))
+        except Exception:                                            # pragma: no cover
+            pass
 
 
 def _collect_rules_for_skipped(
@@ -1454,6 +1530,87 @@ def feedback_search(query: str, output: Optional[str], config: Optional[str],
         )
     console.print(t)
     store.close()
+
+
+# ── Parked files (Step 5.5) ──────────────────────────────────────────────────
+
+@feedback.group("parked")
+def feedback_parked():
+    """Inspect or release files you have marked as 'parked' (kept in place)."""
+    pass
+
+
+@feedback_parked.command("list")
+@click.option("--output", type=click.Path(), default=None)
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+def feedback_parked_list(output: Optional[str], config: Optional[str]):
+    """Show every file currently marked as parked."""
+    path = _resolve_feedback_path(output, config)
+    log = FeedbackLog(path)
+    parked = log.parked_filenames()
+
+    if not parked:
+        console.print(f"[dim]No parked files in {path}[/]")
+        return
+
+    t = Table(title=f"{len(parked)} parked file(s)", box=box.ROUNDED)
+    t.add_column("Filename",   style="cyan",    width=40, no_wrap=True)
+    t.add_column("Parked at",  style="blue",    width=40)
+    t.add_column("Since",      style="dim",     width=19)
+    t.add_column("Category",   style="green",   width=18)
+
+    for name in sorted(parked):
+        rec = parked[name]
+        t.add_row(
+            name[:40],
+            (rec.get("extra", {}).get("parked_at") or rec.get("final_folder") or "—")[:40],
+            (rec.get("ts") or "—")[:19],
+            (rec.get("final_category") or "—")[:18],
+        )
+    console.print(t)
+
+
+@feedback_parked.command("unpark")
+@click.argument("filename")
+@click.option("--output", type=click.Path(), default=None)
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+def feedback_parked_unpark(filename: str, output: Optional[str], config: Optional[str]):
+    """Release one file so it is proposed again on the next process run.
+
+    Writes an ``unparked`` record to the log; the next run will treat the file
+    as new. The file itself is not touched.
+    """
+    path = _resolve_feedback_path(output, config)
+    log = FeedbackLog(path)
+    parked = log.parked_filenames()
+
+    if filename not in parked:
+        console.print(f"[yellow]Not parked: {filename}[/]")
+        if parked:
+            console.print(f"[dim]Currently parked: "
+                          f"{', '.join(sorted(parked)[:5])}"
+                          f"{'…' if len(parked) > 5 else ''}[/]")
+        return
+
+    rec = parked[filename]
+    ok = log.append(FeedbackRecord(
+        event="unparked",
+        ts=__import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat(timespec="seconds"),
+        original_filename=filename,
+        text_excerpt="",
+        proposed_category=rec.get("final_category"),
+        proposed_issuer=rec.get("final_issuer"),
+        proposed_folder=rec.get("final_folder"),
+        proposed_filename=rec.get("final_filename"),
+        backend="manual-unpark",
+        extra={"previous_parked_at": rec.get("extra", {}).get("parked_at")},
+    ))
+    if ok:
+        console.print(f"[green]✓ Unparked {filename}[/]")
+    else:
+        console.print(f"[red]Failed to write unpark record[/]")
 
 
 # ── LLM commands (Step 4: L4 backbone) ───────────────────────────────────────

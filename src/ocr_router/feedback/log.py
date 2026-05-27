@@ -195,5 +195,30 @@ class FeedbackLog:
             "by_backend": by_backend,
         }
 
+    # ------------------------------------------------------------------
+    # Parked-file convenience (used by cli.process to skip files the user
+    # explicitly marked as "OCR'd, kept in place, do not re-propose").
+    # ------------------------------------------------------------------
+
+    def parked_filenames(self) -> dict[str, dict]:
+        """Return ``{filename: latest_park_record}`` for active parked files.
+
+        A file is "active" if its most-recent record is ``event='parked'``.
+        A later ``confirmed`` or ``unparked`` record removes it from the set,
+        so unpark + re-process works cleanly.
+        """
+        latest: dict[str, dict] = {}
+        for rec in self.iter_records():
+            fname = rec.get("original_filename")
+            if not fname:
+                continue
+            ev = rec.get("event")
+            if ev in ("parked", "confirmed", "unparked", "skipped"):
+                latest[fname] = rec
+        return {
+            fname: rec for fname, rec in latest.items()
+            if rec.get("event") == "parked"
+        }
+
 
 __all__ = ["FeedbackLog", "FeedbackRecord", "SCHEMA_VERSION", "DEFAULT_TEXT_EXCERPT_CHARS"]
