@@ -1788,5 +1788,208 @@ def llm_classify_file(file_path: str, config: Optional[str], output: Optional[st
                   f"completion {info.completion_chars} chars[/]")
 
 
+# ── Eval command (Step 6) ────────────────────────────────────────────────────
+
+@cli.command("eval")
+@click.option("--root", type=click.Path(exists=True, file_okay=False), required=True,
+              help="Organized Documents root (ground truth source).")
+@click.option("--config", type=click.Path(exists=True), default=get_config_from_env)
+@click.option("--output", type=click.Path(), default=None,
+              help="Documents root for embedding DB (defaults to --root).")
+@click.option("--sample", type=int, default=200,
+              help="Number of PDFs to evaluate (stratified by category). "
+                   "Use 0 for everything.")
+@click.option("--only", "only_categories", multiple=True,
+              help="Restrict to these top-level category dirs (repeatable).")
+@click.option("--exclude", "exclude_categories", multiple=True,
+              help="Skip these top-level category dirs (repeatable).")
+@click.option("--llm/--no-llm", default=None,
+              help="Override config llm.enabled for this eval.")
+@click.option("--skip-ocr", is_flag=True,
+              help="Do not OCR; skip files with no text layer.")
+@click.option("--seed", type=int, default=42, help="Sampling seed (deterministic).")
+@click.option("--audit", type=click.Path(), default=None,
+              help="Where to write per-file JSONL audit log "
+                   "(default: <output>/_feedback/eval-<timestamp>.jsonl).")
+def cmd_eval(root: str, config: Optional[str], output: Optional[str],
+             sample: int, only_categories: tuple[str, ...],
+             exclude_categories: tuple[str, ...],
+             llm: Optional[bool], skip_ocr: bool, seed: int,
+             audit: Optional[str]):
+    """Measure classifier accuracy against the organized Documents tree.
+
+    For each sampled PDF the eval runs both the keyword router and (optionally)
+    the LLM classifier, then compares verdicts to the ground truth inferred
+    from the PDF's folder path. A per-file JSONL audit log is written so you
+    can grep individual misses.
+
+    Nothing is moved or renamed — the eval is read-only.
+    """
+    from ocr_router.eval import EvalRunner, sample_files
+
+    cfg = load_config(config)
+    cfg_dict = cfg.model_dump()
+    root_dir = Path(root)
+    output_dir = Path(output) if output else root_dir
+
+    # Pick samples first so we can show the count up-front
+    samples = sample_files(
+        root_dir,
+        n=None if sample == 0 else sample,
+        only_categories=list(only_categories) or None,
+        excluded_categories=list(exclude_categories) or None,
+        seed=seed,
+    )
+    if not samples:
+        console.print("[yellow]No PDFs matched the eval filters.[/]")
+        return
+
+    # Build the same classifiers process uses
+    router = DocumentRouter(cfg_dict)
+    ocr_engine = None if skip_ocr else OcrEngine(cfg_dict)
+    if ocr_engine and not ocr_engine.is_available():
+        console.print("[yellow]⚠ Tesseract not found; --skip-ocr behavior.[/]")
+        ocr_engine = None
+    llm_classifier = _maybe_build_llm_classifier(
+        cfg_dict, config, output_dir, cli_override=llm,
+    )
+
+    # Default audit path: sibling of feedback log
+    if audit:
+        audit_path = Path(audit)
+    else:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        audit_path = _resolve_feedback_path(str(output_dir), config).parent / f"eval-{ts}.jsonl"
+
+    from ocr_router.llm.classifier import LLMConfig
+    threshold = LLMConfig.from_dict(cfg_dict).confidence_threshold
+
+    runner = EvalRunner(
+        config=cfg_dict, router=router, ocr_engine=ocr_engine,
+        llm_classifier=llm_classifier if llm_classifier.enabled else None,
+        skip_ocr=skip_ocr or ocr_engine is None,
+        confidence_threshold=threshold,
+        audit_log_path=audit_path,
+    )
+
+    console.print(f"\n[bold cyan]Evaluating {len(samples)} sampled file(s) "
+                  f"from {root_dir}[/]")
+    console.print(f"  LLM:     [dim]"
+                  f"{llm_classifier.backend.label if llm_classifier.enabled else 'disabled'}"
+                  f"[/]")
+    console.print(f"  Audit:   [dim]{audit_path}[/]\n")
+
+    with Progress(transient=False) as prog:
+        task = prog.add_task("Evaluating…", total=len(samples))
+
+        def _cb(i, total, path):
+            prog.update(task, completed=i,
+                        description=f"[cyan]Evaluating…[/] {i}/{total} "
+                                    f"[dim]{path.name[:40]}[/]")
+
+        report = runner.evaluate(samples, progress_cb=_cb)
+
+    _print_eval_report(report, llm_enabled=llm_classifier.enabled)
+
+
+def _print_eval_report(report, *, llm_enabled: bool) -> None:
+    """Render the eval report as a series of Rich tables."""
+    # Headline accuracy
+    t = Table(title="Overall accuracy", box=box.ROUNDED)
+    t.add_column("Backend",   style="cyan")
+    t.add_column("Correct",   style="green", justify="right")
+    t.add_column("Total",     style="dim",   justify="right")
+    t.add_column("Accuracy",  style="bold",  justify="right")
+    t.add_row(
+        "Keyword",
+        str(report.keyword_correct), str(report.n_evaluated),
+        f"{report.keyword_accuracy * 100:.1f}%",
+    )
+    if llm_enabled:
+        t.add_row(
+            "LLM (when attempted)",
+            str(report.llm_correct), str(report.llm_attempted),
+            f"{report.llm_accuracy * 100:.1f}%",
+        )
+        t.add_row(
+            "Hybrid (Step 5 rule)",
+            str(report.hybrid_correct), str(report.n_evaluated),
+            f"{report.hybrid_accuracy * 100:.1f}%",
+        )
+    console.print(t)
+
+    if report.n_skipped:
+        reasons = ", ".join(f"{k}: {v}" for k, v in report.skipped_reasons.items())
+        console.print(f"[dim]Skipped {report.n_skipped} file(s) — {reasons}[/]")
+
+    if llm_enabled and report.llm_attempted:
+        console.print(f"[dim]Avg LLM latency: {report.avg_llm_ms:.0f} ms "
+                      f"({report.total_llm_ms / 1000:.1f} s total)[/]\n")
+
+    # Per-category breakdown
+    if report.by_category:
+        t = Table(title="Accuracy by category", box=box.ROUNDED, show_lines=False)
+        t.add_column("Category", style="cyan")
+        t.add_column("N",       style="dim",   justify="right", width=5)
+        t.add_column("kw",      style="green", justify="right", width=12)
+        if llm_enabled:
+            t.add_column("LLM",    style="green", justify="right", width=12)
+            t.add_column("Hybrid", style="bold green", justify="right", width=12)
+        for cat in sorted(report.by_category, key=lambda c: -report.by_category[c].truth_count):
+            s = report.by_category[cat]
+            row = [
+                cat[:36],
+                str(s.truth_count),
+                f"{s.keyword_correct}/{s.truth_count} "
+                f"({(s.keyword_correct / s.truth_count * 100 if s.truth_count else 0):.0f}%)",
+            ]
+            if llm_enabled:
+                row.append(
+                    f"{s.llm_correct}/{s.truth_count} "
+                    f"({(s.llm_correct / s.truth_count * 100 if s.truth_count else 0):.0f}%)"
+                )
+                row.append(
+                    f"{s.hybrid_correct}/{s.truth_count} "
+                    f"({(s.hybrid_correct / s.truth_count * 100 if s.truth_count else 0):.0f}%)"
+                )
+            t.add_row(*row)
+        console.print(t)
+
+    # Where LLM helped / hurt
+    if llm_enabled and report.llm_helped:
+        t = Table(title=f"LLM helped ({len(report.llm_helped)} files)",
+                  box=box.ROUNDED, show_lines=False)
+        t.add_column("Truth",      style="green", width=22)
+        t.add_column("kw said",    style="yellow", width=22)
+        t.add_column("LLM said",   style="bold green", width=22)
+        t.add_column("File",       style="cyan", width=32, no_wrap=True)
+        for r in report.llm_helped[:15]:
+            t.add_row(
+                r.truth_category[:22], (r.keyword_category or "—")[:22],
+                f"{r.llm_category} ({r.llm_confidence:.2f})"[:22],
+                r.path.name[:32],
+            )
+        console.print(t)
+        if len(report.llm_helped) > 15:
+            console.print(f"[dim]… and {len(report.llm_helped) - 15} more.[/]")
+
+    if llm_enabled and report.llm_hurt:
+        t = Table(title=f"LLM hurt ({len(report.llm_hurt)} files)",
+                  box=box.ROUNDED, show_lines=False)
+        t.add_column("Truth",     style="green", width=22)
+        t.add_column("kw said",   style="bold green", width=22)
+        t.add_column("LLM said",  style="red", width=22)
+        t.add_column("File",      style="cyan", width=32, no_wrap=True)
+        for r in report.llm_hurt[:15]:
+            t.add_row(
+                r.truth_category[:22], (r.keyword_category or "—")[:22],
+                f"{r.llm_category} ({r.llm_confidence:.2f})"[:22],
+                r.path.name[:32],
+            )
+        console.print(t)
+        if len(report.llm_hurt) > 15:
+            console.print(f"[dim]… and {len(report.llm_hurt) - 15} more.[/]")
+
+
 if __name__ == '__main__':
     cli()
