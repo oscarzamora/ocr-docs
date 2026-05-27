@@ -290,7 +290,8 @@ def process(input: str, output: str, config: str, max_files: int,
                 console.print("[yellow]Aborted.[/]")
                 return
             confirm_result = _interactive_confirm(
-                proposals, config, output_dir, feedback_log
+                proposals, config, output_dir, feedback_log,
+                llm_classifier=llm_classifier,
             )
             if confirm_result is None:   # user quit
                 console.print("[yellow]Aborted.[/]")
@@ -633,10 +634,18 @@ def _interactive_confirm(
     config_path: str,
     output_dir: Path,
     feedback_log: "FeedbackLog",
+    llm_classifier: Optional["LLMClassifier"] = None,
 ) -> Optional[tuple[set[int], set[int], str]]:
     """Ask which files to move, collect rules for skipped ones.
 
-    Supported commands at the prompt:
+    When ``llm_classifier`` is enabled, the user's reply is FIRST sent
+    through ``ocr_router.llm.intent.parse_intent`` so natural-language
+    inputs like ``skip 2 because I haven't paid yet`` map to the right
+    action (park 2, capture note). If the LLM is unavailable or returns
+    invalid JSON, we fall through to the deterministic literal parser
+    below — same behavior as before.
+
+    Supported commands at the prompt (literal parser):
       Enter         — move ALL files
       1,3,5         — move ONLY those numbers
       skip 2,4      — move all EXCEPT those numbers
@@ -648,8 +657,14 @@ def _interactive_confirm(
     avoid writing a 'skipped' record for files that were actually parked
     (otherwise the latest-record-wins lookup in ``parked_filenames()``
     silently loses the park). ``note`` carries any free-form rationale the
-    user appended with ``note: ...``. Returns ``None`` if the user quits.
+    user gave. Returns ``None`` if the user quits.
     """
+    nl_enabled = bool(llm_classifier and llm_classifier.enabled)
+    nl_hint = (
+        "  [dim]Tip: with --llm on, just say it in plain English, e.g.\n"
+        "        [yellow]skip 2 because I haven't paid yet[/dim]\n"
+        if nl_enabled else ""
+    )
     console.print(Panel(
         "[bold]Review the table above.[/]\n\n"
         "  [green]Enter[/]          → move ALL files\n"
@@ -658,6 +673,7 @@ def _interactive_confirm(
         "  [magenta]park 7[/]         → keep those files in place permanently (never re-propose)\n"
         "  [dim]Append [italic]note: <reason>[/] to skip/park to capture rationale, e.g.\n"
         "        [yellow]park 7 note: unpaid, surface when paid[/dim]\n"
+        f"{nl_hint}"
         "  [red]q[/]              → quit without moving anything",
         title="What would you like to do?",
         border_style="cyan",
@@ -668,6 +684,69 @@ def _interactive_confirm(
     if raw.lower() == 'q':
         return None
 
+    all_indices = {p.index for p in proposals}
+
+    # ── LLM intent parse (preferred when available) ─────────────────────
+    if nl_enabled and raw:
+        try:
+            from ocr_router.llm.intent import parse_intent
+            file_summaries = [
+                f"{p.pdf_file.name} -> {p.category} / {p.metadata.get('issuer') or '—'}"
+                for p in proposals
+            ]
+            intent, info = parse_intent(
+                raw, n_files=len(proposals),
+                backend=llm_classifier.backend,
+                file_summaries=file_summaries,
+            )
+            if intent is not None:
+                console.print(f"[dim]Understood: {intent.human_summary(len(proposals))}[/]")
+                if intent.action == "quit":
+                    return None
+                if intent.action == "move_all":
+                    return all_indices, set(), intent.note
+                if intent.action == "move_some":
+                    approved = set(intent.indices) & all_indices
+                    parked = set()
+                elif intent.action == "park_some":
+                    parked = set(intent.indices) & all_indices
+                    approved = all_indices - parked
+                elif intent.action == "skip_some":
+                    skip = set(intent.indices) & all_indices
+                    approved = all_indices - skip
+                    parked = set()
+                else:                                                    # pragma: no cover
+                    approved = all_indices
+                    parked = set()
+
+                # Per-file notes win over batch note when writing records
+                if parked:
+                    _record_parked_with_per_file_notes(
+                        [p for p in proposals if p.index in parked],
+                        output_dir, feedback_log, intent,
+                    )
+
+                # Apply implied YAML rules right away
+                if intent.rules:
+                    _apply_intent_rules(intent, proposals, config_path)
+
+                # Skipped files still get a chance for the rule prompt
+                skipped = all_indices - approved - parked
+                if skipped:
+                    console.print(
+                        f"\n[yellow]Skipping #{', '.join(str(n) for n in sorted(skipped))}[/]"
+                    )
+                    _collect_rules_for_skipped(
+                        [p for p in proposals if p.index in skipped],
+                        config_path, output_dir, feedback_log,
+                        note=intent.note,
+                    )
+                return approved, parked, intent.note
+            # intent is None -> fall through to literal parser silently
+        except Exception as exc:                                         # pragma: no cover
+            logger.warning("Intent parse error, falling back to literal parser: %s", exc)
+
+    # ── Literal parser (fallback / no LLM) ──────────────────────────────
     # Allow an optional free-form rationale on park/skip:
     #   "park 7 note: unpaid, surface when paid"
     #   "skip 2,4 note: not mine"
@@ -681,7 +760,6 @@ def _interactive_confirm(
         note_text = raw[_note_idx + len(' note:'):].strip()
         raw = raw[:_note_idx].strip()
 
-    all_indices = {p.index for p in proposals}
     parked_indices: set[int] = set()
     skipped_note = ""
 
@@ -759,6 +837,81 @@ def _record_parked(
             ))
         except Exception:                                            # pragma: no cover
             pass
+
+
+def _record_parked_with_per_file_notes(
+    parked: list[Proposal],
+    output_dir: Path,
+    feedback_log: "FeedbackLog",
+    intent,
+) -> None:
+    """Park-with-notes variant used by the LLM intent path.
+
+    Each file gets the most-specific note available: per-file note if
+    present, else the batch note. Mirrors ``_record_parked`` otherwise.
+    """
+    console.print(f"\n[magenta]Parking #{', '.join(str(p.index) for p in parked)} "
+                  f"— these files will not be re-proposed on future runs.[/]")
+    for p in parked:
+        note = intent.note_for(p.index)
+        try:
+            current_folder = _safe_relpath(p.pdf_file.parent, output_dir)
+            feedback_log.append(FeedbackRecord.from_proposal(
+                event="parked",
+                original_filename=p.pdf_file.name,
+                text=p.text,
+                proposal_meta=p.metadata,
+                proposed_folder=_safe_relpath(p.dest_dir, output_dir),
+                proposed_filename=p.new_filename,
+                proposed_confidence=p.confidence,
+                final_category=p.category,
+                final_issuer=p.metadata.get("issuer"),
+                final_folder=current_folder,
+                final_filename=p.pdf_file.name,
+                backend=p.backend_label,
+                note=note,
+                extra={
+                    "parked_at": current_folder,
+                    "keyword_category": p.keyword_category,
+                    "llm_category": p.llm_category,
+                    "llm_confidence": p.llm_confidence,
+                    "intent_source": "llm",
+                },
+            ))
+        except Exception:                                            # pragma: no cover
+            pass
+
+
+def _apply_intent_rules(intent, proposals: list[Proposal], config_path: str) -> None:
+    """Apply ``FileRule`` entries from a ConfirmIntent to the local YAML.
+
+    Same effect as the manual ``issuer=X`` / ``category=Y`` flow in
+    ``_collect_rules_for_skipped``, just driven by the LLM-extracted
+    rules instead of typed-in commands.
+    """
+    new_issuers: dict[str, str] = {}
+    new_keywords: dict[str, list[str]] = {}
+    by_idx = {p.index: p for p in proposals}
+    for rule in intent.rules:
+        p = by_idx.get(rule.file_index)
+        if p is None:
+            continue
+        stem = Path(p.pdf_file.name).stem.lower()
+        if rule.kind == "issuer":
+            new_issuers[stem] = rule.value
+            console.print(
+                f"  [green]✓ Will add issuer rule from intent: "
+                f"{stem!r} → {rule.value!r}[/]"
+            )
+        elif rule.kind == "category":
+            kw = stem.replace('-', ' ').replace('_', ' ')
+            new_keywords.setdefault(rule.value, []).append(kw)
+            console.print(
+                f"  [green]✓ Will add keyword from intent: "
+                f"{kw!r} → category {rule.value!r}[/]"
+            )
+    if new_issuers or new_keywords:
+        _append_rules_to_config(config_path, new_issuers, new_keywords)
 
 
 def _collect_rules_for_skipped(

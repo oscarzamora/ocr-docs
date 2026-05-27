@@ -22,6 +22,7 @@ from ocr_router.llm.backends import (
 )
 from ocr_router.llm.classifier import LLMClassifier
 from ocr_router.llm.prompts import build_classification_prompt
+from ocr_router.llm.intent import ConfirmIntent, FileNote, FileRule, parse_intent
 
 __all__ = [
     "ClassificationResult",
@@ -33,4 +34,8 @@ __all__ = [
     "OllamaBackend",
     "LLMClassifier",
     "build_classification_prompt",
+    "ConfirmIntent",
+    "FileNote",
+    "FileRule",
+    "parse_intent",
 ]

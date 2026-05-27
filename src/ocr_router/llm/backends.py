@@ -204,6 +204,68 @@ class OllamaBackend(LLMBackend):
             prompt_chars=prompt_chars, completion_chars=len(completion),
         )
 
+    # ------------------------------------------------------------------
+    def chat_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        timeout_s: int = DEFAULT_TIMEOUT_S,
+    ) -> tuple[Optional[dict], ClassifierCallInfo]:
+        """Generic JSON chat: returns a raw dict (not a ClassificationResult).
+
+        Used by callers that need a different JSON schema than the classifier
+        (e.g. the intent parser for the interactive confirm prompt).
+        Returns ``(parsed_dict, info)``; ``parsed_dict`` is None on
+        transport / JSON-parse failure.
+        """
+        client = self._get_client()
+        start = time.time()
+        prompt_chars = len(system) + len(user)
+        completion = ""
+        try:
+            resp = client.chat(
+                model=self.model,
+                format="json",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+                options={
+                    "temperature": self.temperature,
+                    "num_ctx": self.num_ctx,
+                },
+                keep_alive="10m",
+            )
+            completion = (
+                resp.get("message", {}).get("content", "")
+                if isinstance(resp, dict)
+                else getattr(getattr(resp, "message", None), "content", "")
+            )
+        except Exception as exc:
+            duration_ms = int((time.time() - start) * 1000)
+            logger.warning("OllamaBackend.chat_json failed: %s", exc)
+            return None, ClassifierCallInfo(
+                backend=self.label, duration_ms=duration_ms,
+                prompt_chars=prompt_chars, error=str(exc),
+            )
+
+        duration_ms = int((time.time() - start) * 1000)
+        try:
+            data = json.loads(completion) if completion else {}
+        except json.JSONDecodeError as exc:
+            logger.info("OllamaBackend.chat_json: invalid JSON: %s\nRaw: %s", exc, completion[:300])
+            return None, ClassifierCallInfo(
+                backend=self.label, duration_ms=duration_ms,
+                prompt_chars=prompt_chars, completion_chars=len(completion),
+                error=f"invalid JSON: {exc}",
+            )
+
+        return data, ClassifierCallInfo(
+            backend=self.label, duration_ms=duration_ms,
+            prompt_chars=prompt_chars, completion_chars=len(completion),
+        )
+
 
 # Backwards-compat alias
 LocalBackend = OllamaBackend
