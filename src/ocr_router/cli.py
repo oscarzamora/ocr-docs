@@ -177,6 +177,11 @@ def process(input: str, output: str, config: str, max_files: int,
 
         with Progress(transient=True) as prog:
             task = prog.add_task("Reading…", total=len(pdf_files))
+            # Track destinations already allocated in THIS batch so that two
+            # proposals normalising to the same filename get suffixed instead of
+            # silently overwriting each other once we move them. See
+            # _resolve_collision docstring for the original bug.
+            reserved_dest_paths: set[str] = set()
             for i, pdf_file in enumerate(pdf_files, 1):
                 prog.update(task, advance=1)
                 issues: list[str] = []
@@ -236,7 +241,7 @@ def process(input: str, output: str, config: str, max_files: int,
                     issues.append(f"new folder: {dest_dir.relative_to(output_dir)}")
 
                 new_filename = router.normalize_filename(pdf_file.name, metadata)
-                dest_file = _resolve_collision(dest_dir, new_filename)
+                dest_file = _resolve_collision(dest_dir, new_filename, reserved=reserved_dest_paths)
 
                 proposals.append(Proposal(
                     index=i,
@@ -306,6 +311,11 @@ def process(input: str, output: str, config: str, max_files: int,
             archive_dir.mkdir(parents=True, exist_ok=True)
 
         moved = skipped = 0
+        # Per-execution reservation set used by _resolve_collision in BOTH
+        # the rename-in-place and move branches below. Without this, a
+        # same-batch filename collision could silently overwrite an earlier
+        # move (root cause of the 2026-05-26 Interbank incident).
+        reserved_exec_paths: set[str] = set()
         for p in proposals:
             if p.index not in approved_indices:
                 skipped += 1
@@ -339,16 +349,31 @@ def process(input: str, output: str, config: str, max_files: int,
                 source_file = p.pdf_to_extract if p.pdf_to_extract != p.pdf_file else p.pdf_file
 
                 if action_mode == 'rename':
-                    # Rename in place: new name in same folder as source original
-                    final_dest = _resolve_collision(p.pdf_file.parent, p.new_filename)
+                    # Rename in place: new name in same folder as source original.
+                    # Pass the per-execution reservation set so two proposals
+                    # renaming to the same name in the same folder get
+                    # suffixed instead of overwriting.
+                    final_dest = _resolve_collision(
+                        p.pdf_file.parent, p.new_filename,
+                        reserved=reserved_exec_paths,
+                    )
                     source_file.rename(final_dest)
                     # Remove original if OCR produced a separate file
                     if source_file != p.pdf_file and p.pdf_file.exists():
                         p.pdf_file.unlink()
                     p.dest_file = final_dest   # update for history log
                 else:
-                    # Move to target folder — copy the OCR'd (searchable) version
+                    # Move to target folder — copy the OCR'd (searchable) version.
+                    # Re-resolve the destination against on-disk state AND any
+                    # destinations already claimed earlier in this execute loop,
+                    # so a same-batch collision (e.g. two proposals that ended
+                    # up with the same normalised name) becomes ``- 2``,
+                    # ``- 3``, ... instead of a silent overwrite.
                     p.dest_dir.mkdir(parents=True, exist_ok=True)
+                    p.dest_file = _resolve_collision(
+                        p.dest_dir, p.new_filename,
+                        reserved=reserved_exec_paths,
+                    )
                     shutil.copy2(source_file, p.dest_file)
                     if archive_dir:
                         # Archive the original (pre-OCR) for safekeeping
@@ -1025,13 +1050,32 @@ def _parse_nums(s: str) -> set[int]:
     return nums
 
 
-def _resolve_collision(dest_dir: Path, filename: str) -> Path:
+def _resolve_collision(
+    dest_dir: Path,
+    filename: str,
+    reserved: Optional[set] = None,
+) -> Path:
+    """Return a non-colliding destination path.
+
+    Considers BOTH existing files on disk AND a per-batch ``reserved`` set
+    so two proposals in the same run that would normalise to the same
+    filename get suffixed ``- 2``, ``- 3``, ... instead of silently
+    overwriting each other. When ``reserved`` is provided, the returned
+    path is added to it.
+
+    The pre-fix behaviour (disk-only) collapsed a 6-file Interbank batch
+    into 3 destinations because the date extractor returned the same
+    year-only fallback for all six PDFs, then ``shutil.copy2`` happily
+    clobbered them in sequence with no warning.
+    """
     stem, suffix = Path(filename).stem, Path(filename).suffix
     candidate = dest_dir / filename
     counter = 2
-    while candidate.exists():
+    while candidate.exists() or (reserved is not None and str(candidate) in reserved):
         candidate = dest_dir / f"{stem} - {counter}{suffix}"
         counter += 1
+    if reserved is not None:
+        reserved.add(str(candidate))
     return candidate
 
 

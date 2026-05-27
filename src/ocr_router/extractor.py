@@ -38,7 +38,12 @@ class MetadataExtractor:
     def extract_from_text(self, text: str, filename: str) -> dict:
         """Extract all metadata from PDF text, returning a flat dict."""
         account_info = self._extract_account(text)
-        date = self._extract_date(text)
+        # Filename-stem date wins when present (e.g. '20250221_...pdf' ->
+        # 2025-02-21). This is the most reliable signal for bank/CC
+        # statements that name files by statement date and prevents the
+        # year-only fallback from collapsing a whole batch to YYYY-01-01
+        # (which then collides into one filename and silently overwrites).
+        date = self._extract_date_from_filename(filename) or self._extract_date(text)
         # Track whether date came from year-only fallback (stored as YYYY-01-01)
         date_year_only = bool(date and date.endswith('-01-01') and
                               not re.search(r'january\s+1|jan\.?\s+1\b|1/1/', text.lower()))
@@ -69,7 +74,7 @@ class MetadataExtractor:
         """
         counts = {
             '$':  len(re.findall(r'\$\s*[\d,]+', text)),
-            'S/': len(re.findall(r'\bS/\s*[\d,]+', text)),
+            'S/': len(re.findall(r'\bS/\.?\s*[\d,]+', text)),
             '€':  len(re.findall(r'€\s*[\d,]+|[\d,]+\s*€', text)),
             '£':  len(re.findall(r'£\s*[\d,]+', text)),
         }
@@ -125,6 +130,42 @@ class MetadataExtractor:
                 chars[i] = ' '
         return ''.join(chars)
 
+    def _extract_date_from_filename(self, filename: str) -> Optional[str]:
+        """Extract a date from the filename stem.
+
+        Recognises (in order):
+          * ``YYYYMMDD`` at start (e.g. ``20250221_account.pdf``)
+          * ``YYYY-MM-DD`` / ``YYYY.MM.DD`` / ``YYYY_MM_DD`` at start
+          * ``YYYY-MM`` / ``YYYY.MM`` at start (day defaults to 01)
+
+        Returns ``None`` if nothing matches. The bare year case is left to
+        the in-text extractor so we don't shadow it with a false-positive
+        date when the filename only contains a year as part of an
+        unrelated token.
+        """
+        if not filename:
+            return None
+        stem = Path(filename).stem
+        # YYYYMMDD followed by a separator or end-of-stem
+        m = re.match(r'^(\d{4})(\d{2})(\d{2})(?:[_\-]|$)', stem)
+        if m:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12 and 1 <= d <= 31:
+                return self._normalize_date(y, mo, d)
+        # YYYY[sep]MM[sep]DD
+        m = re.match(r'^(\d{4})[\-._](\d{1,2})[\-._](\d{1,2})(?:\D|$)', stem)
+        if m:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12 and 1 <= d <= 31:
+                return self._normalize_date(y, mo, d)
+        # YYYY[sep]MM (no day)
+        m = re.match(r'^(\d{4})[\-._](\d{1,2})(?:\D|$)', stem)
+        if m:
+            y, mo = int(m.group(1)), int(m.group(2))
+            if 1 <= mo <= 12:
+                return self._normalize_date(y, mo, 1)
+        return None
+
     def _extract_date(self, text: str) -> Optional[str]:
         """Extract and normalize a date to YYYY-MM-DD.
 
@@ -159,11 +200,15 @@ class MetadataExtractor:
             if month_num:
                 return self._normalize_date(int(named.group(3)), month_num, int(named.group(2)))
 
-        # 3. Numeric MM/DD/YYYY or MM-DD-YYYY — iterate all matches (first valid wins)
+        # 3. Numeric MM/DD/YYYY or MM-DD-YYYY — iterate all matches (first valid wins).
+        #    When the first field is > 12 it cannot be a US-format month: try
+        #    DD/MM/YYYY (European / LATAM convention used by Peruvian statements).
         for numeric in re.finditer(r'\b(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})\b', text):
-            m, d, y = int(numeric.group(1)), int(numeric.group(2)), int(numeric.group(3))
-            if 1 <= m <= 12 and 1 <= d <= 31:
-                return self._normalize_date(y, m, d)
+            a, b, y = int(numeric.group(1)), int(numeric.group(2)), int(numeric.group(3))
+            if 1 <= a <= 12 and 1 <= b <= 31:
+                return self._normalize_date(y, a, b)
+            if 1 <= b <= 12 and 1 <= a <= 31:  # DD/MM/YYYY fallback
+                return self._normalize_date(y, b, a)
 
         # 4. ISO YYYY-MM-DD
         iso = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', text)
@@ -193,7 +238,7 @@ class MetadataExtractor:
         labels = self.extraction_patterns.get('amount_labels', _DEFAULT_AMOUNT_LABELS)
         for label in labels:
             pattern = re.compile(
-                re.escape(label) + r'[:\s]*(?:\$|S/|€|£)?\s*([\d,]+(?:\.\d{1,2})?)',
+                re.escape(label) + r'[:\s]*(?:\$|S/\.?|€|£)?\s*([\d,]+(?:\.\d{1,2})?)',
                 re.IGNORECASE,
             )
             m = pattern.search(text)
@@ -203,7 +248,7 @@ class MetadataExtractor:
                     return raw
 
         # Fallback: first dollar OR soles amount that includes cents
-        m = re.search(r'(?:\$|S/)\s*([\d,]+\.\d{2})', text)
+        m = re.search(r'(?:\$|S/\.?)\s*([\d,]+\.\d{2})', text)
         if m:
             raw = m.group(1).replace(',', '')
             if self._is_valid_amount(raw):
