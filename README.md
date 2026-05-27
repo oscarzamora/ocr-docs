@@ -89,7 +89,7 @@ pip install -e .[dev]
 
 ```powershell
 # Inside the cloned repo:
-Copy-Item config/routing-config.example.yaml config/routing-config.local.yaml
+Copy-Item config/routing-config.yaml config/routing-config.local.yaml
 # Or anywhere outside the repo if installed via pipx:
 ocr-router --help    # shows OCR_CONFIG_PATH env var usage
 ```
@@ -496,8 +496,7 @@ ocr-docs/
     eval/                      # L6: accuracy harness
       runner.py
   config/
-    routing-config.example.yaml
-    routing-config.yaml
+    routing-config.yaml        # tracked default template (no PII)
     routing-config.local.yaml  # local-only, gitignored
   scripts/
     dry_run.py
@@ -523,7 +522,7 @@ DEBUG=false
 ## Public vs Private Data
 
 1. Keep generic templates in git:
-   - `config/routing-config.example.yaml`
+   - `config/routing-config.yaml`
    - `.env.example`
 2. Keep personal files local and ignored:
    - `config/routing-config.local.yaml`
