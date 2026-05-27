@@ -23,21 +23,28 @@ organized Documents tree with human-in-the-loop confirmation.
 - NEVER guess paths. If the user has not said which folder, ask.
 - NEVER pipe document text into a cloud API. The pipeline is local-only.
 
-## Default paths (this user setup)
+## Default paths
 
-| Purpose | Path |
-|---|---|
-| Input (new downloads) | `C:\Users\ozamo\Documents\__downloads__` |
-| Output (organized Documents root) | `C:\Users\ozamo\Documents` |
-| Config | `config\routing-config.local.yaml` (fall back to `config\routing-config.yaml`) |
-| Feedback log | `data\_feedback\corrections.jsonl` (project-local; never under Documents) |
-| Embedding store | `data\_feedback\examples.sqlite` (project-local) |
+The pipeline uses these conventions. Bookkeeping (logs + vector store + eval
+audits) lives **inside the project folder**, NOT under the user's documents.
 
-Bookkeeping (logs + vector store + eval audits) lives inside the project
-folder, NOT under the user's Documents tree. The Documents tree is for the
-filed PDFs themselves only.
+| Purpose | Default location | Notes |
+|---|---|---|
+| Input (new downloads) | `<INPUT_DIR>` — ask the user once per session | typical: their browser's download folder, or a `__downloads__` subfolder |
+| Output (organized documents root) | `<OUTPUT_DIR>` — ask the user once per session | the root where filed PDFs end up |
+| Config | `config\routing-config.local.yaml` (fall back to `config\routing-config.yaml`) | personal categories/issuers stay in the local file (gitignored) |
+| Feedback log | `data\_feedback\corrections.jsonl` (project-local) | auto-resolved, no flag needed |
+| Embedding store | `data\_feedback\examples.sqlite` (project-local) | auto-resolved, no flag needed |
 
-Confirm these on first use of a workspace.
+On the **first** message of a session, if the user has not stated paths,
+ask in one short sentence:
+
+> "Which folder should I scan for new files, and which folder is your
+> organized documents root?"
+
+Cache the answer for the rest of the session. Suggest sensible OS defaults
+if they want one — e.g. on Windows the browser default is
+`%USERPROFILE%\Downloads`. Never invent paths the user hasn't confirmed.
 
 ## Approach
 
@@ -46,16 +53,16 @@ When the user asks you to **process / scan / organize / file** their documents:
 ### Phase 1 — Health check (only on first invocation per session)
 
 ```powershell
-ocr-router llm doctor --output "C:\Users\ozamo\Documents"
+ocr-router llm doctor
 ```
 
 If chat backend or embedder is `down`, tell the user and offer to fall
 back to keyword-only (`--no-llm`). If the embedding store is empty, tell
-them they should bootstrap first:
+them they should bootstrap first against their organized documents root:
 
 ```powershell
-ocr-router feedback bootstrap-tree --root "C:\Users\ozamo\Documents"
-ocr-router feedback embed --output "C:\Users\ozamo\Documents"
+ocr-router feedback bootstrap-tree --root "<OUTPUT_DIR>"
+ocr-router feedback embed
 ```
 
 ### Phase 2 — Dry-run analysis
@@ -107,12 +114,15 @@ at `<path>`. History appended to `PROCESSED_PDFS.md`."
 
 | Intent | Command |
 |---|---|
-| "Show me what was processed lately" | `ocr-router feedback show --output "...\Documents" --limit 20` |
-| "How accurate is the pipeline?" | `ocr-router eval --root "...\Documents" --sample 50 --llm --skip-ocr` |
-| "What did we already park?" | `ocr-router feedback parked list --output "...\Documents"` |
+| "Show me what was processed lately" | `ocr-router feedback show --limit 20` |
+| "How accurate is the pipeline?" | `ocr-router eval --root "<OUTPUT_DIR>" --sample 50 --llm --skip-ocr` |
+| "What did we already park?" | `ocr-router feedback parked list` |
 | "Release the 911 doc" | `ocr-router feedback parked unpark "<filename>"` |
-| "Search for prior bank statements" | `ocr-router feedback search "<query>" --output "...\Documents"` |
+| "Search for prior bank statements" | `ocr-router feedback search "<query>"` |
 | "Update the issuer-recognition list" | Open `config\routing-config.local.yaml` and add to `known_issuers:` |
+
+(Most commands no longer need `--output` — bookkeeping resolves to the
+project-local `data\_feedback\` automatically.)
 
 ## Output Format
 
