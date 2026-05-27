@@ -45,6 +45,7 @@ The tool emphasizes safety and reviewability:
 - Python 3.10+
 - Windows PowerShell
 - Optional OCR engine: PDF24 Creator (recommended)
+- Optional local LLM stack: Ollama (recommended — see Section 6)
 
 Install PDF24 (optional but recommended):
 
@@ -54,7 +55,26 @@ Install PDF24 (optional but recommended):
 | Chocolatey | `choco install pdf24creator` |
 | Download | https://tools.pdf24.org/en/creator |
 
-### Clone and install dependencies
+### One-line install (recommended for end users)
+
+If you just want to **use** the tool, install it as a standalone CLI with [pipx](https://pipx.pypa.io/):
+
+```powershell
+# One-time setup (install pipx)
+python -m pip install --user pipx
+python -m pipx ensurepath
+
+# Install ocr-router from GitHub (or a local clone)
+pipx install git+https://github.com/oscarzamora/ocr-docs.git
+
+# Verify
+ocr-router --help
+```
+
+This puts `ocr-router` on your PATH so you can run it from any terminal in any folder.
+To upgrade later: `pipx upgrade ocr-router`. To uninstall cleanly: `pipx uninstall ocr-router`.
+
+### Clone and install (for development / customizing)
 
 ```powershell
 git clone https://github.com/oscarzamora/ocr-docs.git
@@ -62,16 +82,19 @@ cd ocr-docs
 
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -e .[dev]
 ```
 
 ### Create your local private config
 
 ```powershell
+# Inside the cloned repo:
 Copy-Item config/routing-config.example.yaml config/routing-config.local.yaml
+# Or anywhere outside the repo if installed via pipx:
+ocr-router --help    # shows OCR_CONFIG_PATH env var usage
 ```
 
-Edit `config/routing-config.local.yaml` with your own categories, issuers, and route templates.
+Edit your local config with your own categories, issuers, and route templates.
 
 ---
 
@@ -306,6 +329,57 @@ python -m ocr_router process ... --no-llm
 # Full revert to pre-L4 keyword-only baseline (preserved as a tag)
 git checkout pre-l4-baseline
 ```
+
+---
+
+## 7. Agent Mode (`@OCR Router` in VS Code Copilot Chat)
+
+Instead of typing CLI commands, you can drive the pipeline from VS Code Copilot
+chat. The repo ships with a workspace agent definition at
+`.github/agents/ocr-router.agent.md`.
+
+### Setup
+
+1. Open this workspace in VS Code with the GitHub Copilot extension installed.
+2. Restart the chat window once so the agent gets picked up.
+3. Type `@` in the chat input — you should see `@OCR Router` in the picker.
+
+### Use it
+
+```text
+You:         @OCR Router scan my downloads
+@OCR Router: [runs --dry-run, shows a Markdown table of proposed moves
+              with a Backend column — agree/LLM/keyword and confidence]
+You:         park 4, rename 3 to "2026.05 - Chase Checking Statement.pdf", go
+@OCR Router: [executes — moves 6, parks 1, renames 1; updates feedback log]
+```
+
+The agent reuses the same `ocr-router` CLI under the hood, so every move
+is also logged to `corrections.jsonl` and feeds future runs through the
+embedding store.
+
+### Make it available in every workspace
+
+Copy the agent file once to your user profile so `@OCR Router` works in any
+project you open:
+
+```powershell
+# VS Code user prompts folder (Windows)
+$dst = "$env:APPDATA\Code\User\prompts"
+New-Item -ItemType Directory -Path $dst -Force | Out-Null
+Copy-Item .github\agents\ocr-router.agent.md $dst\
+```
+
+After the copy, the agent is discoverable in every workspace — even ones
+that don't contain this repo. Make sure `ocr-router` is on your PATH
+(install via `pipx` as shown in Section 1).
+
+### What the agent does NOT do
+
+- **No silent moves** — every run starts with `--dry-run` and waits for `go`.
+- **No cloud calls** — the pipeline is local-only.
+- **No code edits** — it only invokes the CLI.
+- **No bypass of `park`** — files you parked stay parked.
 
 ---
 
