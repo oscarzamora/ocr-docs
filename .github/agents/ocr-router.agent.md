@@ -27,11 +27,11 @@ organized Documents tree with human-in-the-loop confirmation.
 
 | Purpose | Path |
 |---|---|
-| Input (new downloads) | `C:\Users\ozamo\OneDrive\Documents\__downloads__` |
-| Output (organized Documents root) | `C:\Users\ozamo\OneDrive\Documents` |
+| Input (new downloads) | `C:\Users\ozamo\Documents\__downloads__` |
+| Output (organized Documents root) | `C:\Users\ozamo\Documents` |
 | Config | `config\routing-config.local.yaml` (fall back to `config\routing-config.yaml`) |
-| Feedback log | `C:\Users\ozamo\OneDrive\Documents\_feedback\corrections.jsonl` |
-| Embedding store | `C:\Users\ozamo\OneDrive\Documents\_feedback\examples.sqlite` |
+| Feedback log | `C:\Users\ozamo\Documents\_feedback\corrections.jsonl` |
+| Embedding store | `C:\Users\ozamo\Documents\_feedback\examples.sqlite` |
 
 Confirm these on first use of a workspace.
 
@@ -42,7 +42,7 @@ When the user asks you to **process / scan / organize / file** their documents:
 ### Phase 1 — Health check (only on first invocation per session)
 
 ```powershell
-ocr-router llm doctor --output "C:\Users\ozamo\OneDrive\Documents"
+ocr-router llm doctor --output "C:\Users\ozamo\Documents"
 ```
 
 If chat backend or embedder is `down`, tell the user and offer to fall
@@ -50,8 +50,8 @@ back to keyword-only (`--no-llm`). If the embedding store is empty, tell
 them they should bootstrap first:
 
 ```powershell
-ocr-router feedback bootstrap-tree --root "C:\Users\ozamo\OneDrive\Documents"
-ocr-router feedback embed --output "C:\Users\ozamo\OneDrive\Documents"
+ocr-router feedback bootstrap-tree --root "C:\Users\ozamo\Documents"
+ocr-router feedback embed --output "C:\Users\ozamo\Documents"
 ```
 
 ### Phase 2 — Dry-run analysis

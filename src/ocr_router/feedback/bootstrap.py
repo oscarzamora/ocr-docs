@@ -431,7 +431,7 @@ def infer_label_from_path(pdf_path: Path, root: Path) -> InferredLabel:
 
     Example::
 
-        root  = C:\\Users\\me\\Documents
+        root  = C:\\Users\\<user>\\Documents
         path  = root / "Bills" / "FPL" / "2026" / "2026.04 - FPL.pdf"
         →   category="Bills", issuer="FPL", year="2026"
 
@@ -509,7 +509,7 @@ def bootstrap_from_tree(
     the final (human-approved) filename.
 
     Args:
-        root: Documents root (e.g. ``C:\\Users\\me\\OneDrive\\Documents``).
+        root: Documents root (e.g. ``C:\\Users\\<user>\\Documents``).
         feedback_log: log to append to.
         ocr_engine: optional OcrEngine for PDFs with no text layer.
         force: re-import filenames already present in the log.

@@ -1288,7 +1288,7 @@ def feedback_bootstrap(source: str, history_path: str, output: Optional[str],
 
 @feedback.command("bootstrap-tree")
 @click.option("--root", type=click.Path(exists=True, file_okay=False), required=True,
-              help="Organized Documents root (e.g. C:\\Users\\me\\OneDrive\\Documents).")
+              help="Organized Documents root (e.g. C:\\Users\\<user>\\Documents).")
 @click.option("--output", type=click.Path(), default=None,
               help="Documents root for _feedback/ location (defaults to --root).")
 @click.option("--config", type=click.Path(exists=True), default=get_config_from_env,

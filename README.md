@@ -217,8 +217,8 @@ python scripts/sanitize_check.py
 
 ```powershell
 python -m ocr_router process `
-  --input  "C:\Users\me\OneDrive\Documents\__downloads__" `
-  --output "C:\Users\me\OneDrive\Documents" `
+  --input  "C:\Users\<user>\Documents\__downloads__" `
+  --output "C:\Users\<user>\Documents" `
   --config config/routing-config.local.yaml `
   --llm
 ```
@@ -227,7 +227,7 @@ python -m ocr_router process `
 
 ```powershell
 python -m ocr_router eval `
-  --root "C:\Users\me\OneDrive\Documents" `
+  --root "C:\Users\<user>\Documents" `
   --sample 200 --llm
 ```
 
@@ -262,13 +262,13 @@ ollama pull nomic-embed-text
 
 # 3. (One time) Bootstrap the feedback log from your existing organized tree
 python -m ocr_router feedback bootstrap-tree `
-  --root "C:\Users\me\OneDrive\Documents"
+  --root "C:\Users\<user>\Documents"
 
 # 4. (One time) Embed all bootstrapped records into the local SQLite vector store
-python -m ocr_router feedback embed --output "C:\Users\me\OneDrive\Documents"
+python -m ocr_router feedback embed --output "C:\Users\<user>\Documents"
 
 # 5. Verify the stack is healthy
-python -m ocr_router llm doctor --output "C:\Users\me\OneDrive\Documents"
+python -m ocr_router llm doctor --output "C:\Users\<user>\Documents"
 ```
 
 ### Daily workflow

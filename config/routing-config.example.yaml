@@ -157,8 +157,8 @@ manifest:
 # The bootstrap parser handles all three formats.
 history:
   monthly: false
-  # dir:  "C:\\Users\\me\\OneDrive\\Documents\\__downloads__"
-  # path: "C:\\Users\\me\\OneDrive\\Documents\\PROCESSED_PDFS.md"
+  # dir:  "C:\\Users\\<user>\\Documents\\__downloads__"
+  # path: "C:\\Users\\<user>\\Documents\\PROCESSED_PDFS.md"
 
 # Learning / feedback log (L1)
 # Every confirmed, skipped, and rule-added decision is appended here as JSONL.
@@ -166,13 +166,13 @@ history:
 # Override location with OCR_FEEDBACK_LOG env var, or set feedback.path below.
 # Default: <output_dir>/_feedback/corrections.jsonl
 feedback:
-  # path: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\corrections.jsonl"
+  # path: "C:\\Users\\<user>\\Documents\\_feedback\\corrections.jsonl"
 
   # SQLite embedding store (L3). Populated incrementally by
   # `ocr-router feedback embed`. Override location with OCR_EMBEDDINGS_DB env
   # var, or set feedback.embeddings_db below.
   # Default: sibling of the feedback log -> <feedback_dir>/examples.sqlite
-  # embeddings_db: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\examples.sqlite"
+  # embeddings_db: "C:\\Users\\<user>\\Documents\\_feedback\\examples.sqlite"
 
 # Local-first LLM classifier (L4). Off by default — your run is 100%
 # deterministic until you flip enabled: true.
