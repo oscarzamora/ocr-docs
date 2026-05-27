@@ -36,6 +36,12 @@ The pipeline processes PDFs in a fixed sequence across 6 independent components 
 
 ```
 OcrEngine → PdfTextExtractor → MetadataExtractor → DocumentRouter → FolderResolver → ManifestWriter
+                                                          │
+                                                          ▼ (optional, when --llm)
+                                                  LLMClassifier (Ollama llama3.2:3b)
+                                                          │
+                                                          ▼
+                                                  EmbeddingStore (few-shot from past confirmed decisions)
 ```
 
 1. **`ocr_engine.py`** — Shells out to `pdf24-Ocr.exe` (Windows). OCR only runs on files with `confidence == 0.0` (no text layer). Falls back to text-only mode if PDF24 is unavailable.
@@ -45,14 +51,35 @@ OcrEngine → PdfTextExtractor → MetadataExtractor → DocumentRouter → Fold
 5. **`manifest.py`** — Writes `ManifestEntry` records to both CSV and JSONL in parallel.
 6. **`config.py`** — Loads `routing-config.yaml` into a Pydantic `RoutingConfig` model. All other components receive `config.model_dump()` (a plain dict).
 
+### Optional learning layers (L1–L6, all opt-in, all local)
+
+7. **`feedback/log.py`** — Append-only JSONL log under `<output>/_feedback/corrections.jsonl`. Every `process` run writes one `confirmed` / `skipped` / `parked` / `rule_added` record per file. `FeedbackLog.parked_filenames()` returns the active parked set (latest-record-wins across the lifecycle).
+8. **`feedback/bootstrap.py`** — Two pre-population modes: `bootstrap_from_downloads` parses `PROCESSED_PDFS.md` history, `bootstrap_from_tree` infers `(category, issuer, year)` from the organized Documents folder layout. Both run full OCR only when no text layer is present.
+9. **`feedback/store.py`** — SQLite-backed embedding store. `OllamaEmbedder(nomic-embed-text, 768-dim)` + `EmbeddingStore.search()` does cosine similarity via numpy matmul (no vector DB dependency). `index_log_into_store()` trims excerpts to `max_chars=6000` before embedding to stay under the embedder's 2048-token context.
+10. **`llm/classifier.py`** — `LLMClassifier` composes `OllamaBackend` (chat with `format='json'`) + `OllamaEmbedder` + `EmbeddingStore`. `fetch_neighbors()` trims the query text the same way. Defensively rejects categories the model invents.
+11. **`llm/backends.py`** — `LLMBackend` ABC + `NullBackend` (used when LLM disabled so callers always have a safe `.classify()` to call) + `OllamaBackend`. `info()` probe distinguishes "daemon down" from "model not pulled".
+12. **`eval/runner.py`** — Read-only accuracy harness. `sample_files()` is stratified-deterministic; `EvalRunner` reuses the production classifiers and the Step 5 decision rule (via lazy import of `cli._apply_llm_decision`) so the eval tests the exact code path `process` uses.
+
 ### Interactive CLI phases
 
 The `process` command runs in distinct phases:
-1. **Analyse** — OCR + extract + classify all files silently; builds a `Proposal` dataclass per file
-2. **Review** — prints a Rich table of all proposals (`--dry-run` exits here)
-3. **Confirm** — prompts Move vs Rename-in-place, then which files to act on (`Enter`=all, `1,3,5`=selected, `skip 2,4`=all except, `q`=quit); skipped with `--no-interactive`
-4. **Execute** — moves/renames files, optionally archives originals to `_processed-originals/`
-5. **Log** — appends a section to `PROCESSED_PDFS.md`, writes manifest entries
+1. **Pre-filter** — drops files already marked as `parked` in the feedback log (silent skip).
+2. **Analyse** — OCR + extract + keyword classify + (optional) LLM classify all files silently; builds a `Proposal` dataclass per file with `keyword_category`, `llm_category`, `llm_confidence`, `backend_label`.
+3. **Review** — prints a Rich table of all proposals; shows a `Backend` column when `--llm` is on (`agree ✓ 0.99` | `LLM ✱ 0.90 / kw said:…` | `kw (LLM low) 0.40` | `llm err`). `--dry-run` exits here.
+4. **Confirm** — prompts Move vs Rename-in-place, then which files to act on (`Enter`=all, `1,3,5`=selected, `skip 2,4`=all except, `park 7`=keep in place forever, `q`=quit); skipped with `--no-interactive`.
+5. **Execute** — moves/renames files, optionally archives originals to `_processed-originals/`.
+6. **Log** — appends a section to `PROCESSED_PDFS.md`, writes manifest entries, **writes one feedback record per file** carrying `backend_label` and the LLM diagnostics.
+
+### LLM decision rule (in `cli._apply_llm_decision`, fully unit-tested)
+
+| Situation | Final category | `backend_label` |
+|---|---|---|
+| LLM disabled or returned None | keyword | `keyword` |
+| LLM confidence < threshold | keyword (LLM shown as hint if disagreeing) | `keyword-llm-low-conf` |
+| LLM agrees with keyword | keyword (adopt LLM issuer if keyword had none) | `agree` |
+| Keyword = `Uncategorized` AND LLM confident | LLM (silent override) | `hybrid-llm` |
+| Genuine disagreement above threshold | LLM (flagged for HITL) | `hybrid-llm-disagree` |
+| LLM hallucinated non-config category | rejected, treated as failure | (logged, returns None) |
 
 ## Key Conventions
 
@@ -72,7 +99,13 @@ The `process` command runs in distinct phases:
 
 **`ocr_confidence`** is a naive heuristic (`min(len(text) / 5000.0, 1.0)`), not a real OCR confidence score.
 
-**Test fixtures** in `conftest.py` provide `temp_dir`, `sample_pdf` (blank pypdf PDF), and `sample_config` (dict). Use these rather than creating new fixture patterns.
+**LLM is always opt-in.** Default config has `llm.enabled: false`; CLI flag `--no-llm` always wins. When Ollama is unreachable, `_maybe_build_llm_classifier` returns a `NullBackend`-wrapped classifier so the pipeline degrades to keyword-only with a single yellow warning. **Never** add a cloud LLM path silently — any cloud backend must require both an explicit env var AND an explicit `llm.cloud.enabled: true` opt-in (currently no cloud backend is implemented by design; this repo is local-only).
+
+**Data lives next to data.** Feedback log, embedding store, and eval audit logs all live under `<output>/_feedback/` (typically inside the user's OneDrive Documents), never inside the repo. The repo is just code. Default paths are resolved via `_resolve_feedback_path` and `_resolve_embed_db_path`, both honor env vars (`OCR_FEEDBACK_LOG`, `OCR_EMBEDDINGS_DB`) and config keys (`feedback.path`, `feedback.embeddings_db`).
+
+**Recovery point.** Tag `pre-l4-baseline` on `master` marks the last keyword-only commit before the L1–L6 work landed. Roll back via `git checkout pre-l4-baseline` if needed.
+
+**Test fixtures** in `conftest.py` provide `temp_dir`, `sample_pdf` (blank pypdf PDF), and `sample_config` (dict). Use these rather than creating new fixture patterns. **LLM tests use a `_FakeBackend`** and **embedding tests use a `FakeEmbedder`** — no real Ollama is needed to run the suite (one opt-in integration test is gated on `OLLAMA_TEST=1`).
 
 ## Environment Variables
 
