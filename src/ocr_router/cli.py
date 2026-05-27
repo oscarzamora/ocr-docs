@@ -128,6 +128,13 @@ def process(input: str, output: str, config: str, max_files: int,
             skip_ocr = True
 
         pdf_files = list(input_dir.rglob('*.pdf'))
+        # Defensive: exclude any '_ocr.pdf' siblings of an original. These can
+        # be left behind by an interrupted run (older bug, pre-fix); skip them
+        # so we never propose an OCR temp file as a fresh document.
+        pdf_files = [
+            p for p in pdf_files
+            if not p.name.endswith('_ocr.pdf') or not (p.parent / p.name.replace('_ocr.pdf', '.pdf')).exists()
+        ]
         if not pdf_files:
             console.print("[yellow]No PDFs found.[/]")
             return
@@ -156,7 +163,17 @@ def process(input: str, output: str, config: str, max_files: int,
         console.print(f"\n[bold cyan]Analysing {len(pdf_files)} PDF(s)…[/]")
         proposals: list[Proposal] = []
         skipped_ocr: list[Path] = []
-        ocr_tmp_dir = input_dir / '_ocr_tmp'
+        # Use a system temp dir so OCR artifacts NEVER land in the user's
+        # input folder (Bug 2). cleanup_tmp() runs in the outer try/finally.
+        import tempfile as _tempfile
+        ocr_tmp_dir = Path(_tempfile.mkdtemp(prefix='ocr_router_'))
+
+        def _cleanup_tmp():
+            try:
+                if ocr_tmp_dir.exists():
+                    shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
         with Progress(transient=True) as prog:
             task = prog.add_task("Reading…", total=len(pdf_files))
@@ -264,18 +281,20 @@ def process(input: str, output: str, config: str, max_files: int,
 
         # ── Phase 3: interactive confirmation ────────────────────────────────
         approved_indices: set[int]
+        parked_indices: set[int] = set()
         action_mode = 'move'   # 'move' | 'rename'
         if interactive:
             action_mode = _ask_action_mode()
             if action_mode is None:
                 console.print("[yellow]Aborted.[/]")
                 return
-            approved_indices = _interactive_confirm(
+            confirm_result = _interactive_confirm(
                 proposals, config, output_dir, feedback_log
             )
-            if approved_indices is None:   # user quit
+            if confirm_result is None:   # user quit
                 console.print("[yellow]Aborted.[/]")
                 return
+            approved_indices, parked_indices = confirm_result
         else:
             approved_indices = {p.index for p in proposals}
 
@@ -288,6 +307,10 @@ def process(input: str, output: str, config: str, max_files: int,
         for p in proposals:
             if p.index not in approved_indices:
                 skipped += 1
+                # Don't write a 'skipped' record for parked files — that would
+                # override the 'parked' record (latest-wins) and lose the park.
+                if p.index in parked_indices:
+                    continue
                 # Capture skip for future learning (best-effort, never raises)
                 try:
                     feedback_log.append(FeedbackRecord.from_proposal(
@@ -381,9 +404,7 @@ def process(input: str, output: str, config: str, max_files: int,
             except Exception as e:
                 console.print(f"[red]Error moving {p.pdf_file.name}: {e}[/]")
 
-        # ── Cleanup OCR temp dir ─────────────────────────────────────────────
-        if ocr_tmp_dir.exists():
-            shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
+        # OCR temp dir cleanup handled by outer finally clause.
 
         verb = "Renamed" if action_mode == 'rename' else "Moved"
         console.print(f"\n[bold green]✓ {verb} {moved} file(s)[/]"
@@ -405,6 +426,12 @@ def process(input: str, output: str, config: str, max_files: int,
         console.print(f"[red]Fatal error: {e}[/]")
         logger.exception(e)
         sys.exit(1)
+    finally:
+        # Always clean up the OCR temp dir, even on early return / exception
+        try:
+            _cleanup_tmp()
+        except Exception:
+            pass
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -604,7 +631,7 @@ def _interactive_confirm(
     config_path: str,
     output_dir: Path,
     feedback_log: "FeedbackLog",
-) -> Optional[set[int]]:
+) -> Optional[tuple[set[int], set[int]]]:
     """Ask which files to move, collect rules for skipped ones.
 
     Supported commands at the prompt:
@@ -615,7 +642,10 @@ def _interactive_confirm(
                       again on future runs (records as event='parked' in the log)
       q             — quit without moving anything
 
-    Returns a set of approved indices, or None if the user quits.
+    Returns ``(approved_indices, parked_indices)`` so the caller can avoid
+    writing a 'skipped' record for files that were actually parked
+    (otherwise the latest-record-wins lookup in ``parked_filenames()``
+    silently loses the park). Returns ``None`` if the user quits.
     """
     console.print(Panel(
         "[bold]Review the table above.[/]\n\n"
@@ -664,7 +694,7 @@ def _interactive_confirm(
             feedback_log,
         )
 
-    return approved
+    return approved, parked_indices
 
 
 def _record_parked(

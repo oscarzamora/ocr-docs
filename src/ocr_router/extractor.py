@@ -59,14 +59,27 @@ class MetadataExtractor:
     # ------------------------------------------------------------------
 
     def _extract_currency(self, text: str) -> str:
-        """Detect the primary currency used in the document. Defaults to '$'."""
-        if re.search(r'\bS/\s*[\d,]+', text):
-            return 'S/'
-        if re.search(r'€\s*[\d,]+|[\d,]+\s*€', text):
-            return '€'
-        if re.search(r'£\s*[\d,]+', text):
-            return '£'
-        return '$'
+        """Detect the primary currency used in the document.
+
+        Counts symbol occurrences and picks the most frequent. Defaults to
+        ``$`` on ties or when none are present. This avoids the historical
+        bug where a single stray ``€`` (from OCR noise / a copyright glyph
+        misread / a tiny FX-conversion footnote) flipped a clearly-USD
+        statement's amount into a euro-formatted filename.
+        """
+        counts = {
+            '$':  len(re.findall(r'\$\s*[\d,]+', text)),
+            'S/': len(re.findall(r'\bS/\s*[\d,]+', text)),
+            '€':  len(re.findall(r'€\s*[\d,]+|[\d,]+\s*€', text)),
+            '£':  len(re.findall(r'£\s*[\d,]+', text)),
+        }
+        winner, n = max(counts.items(), key=lambda kv: (kv[1], kv[0] == '$'))
+        if n == 0:
+            return '$'
+        # Bias toward $ on ties: any non-$ winner must beat $ count strictly.
+        if counts['$'] >= n:
+            return '$'
+        return winner
 
     # ------------------------------------------------------------------
     # Date extraction

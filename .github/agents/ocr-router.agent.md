@@ -22,6 +22,45 @@ organized Documents tree with human-in-the-loop confirmation.
 - If the user asks "what would happen if I ran this", always pass `--dry-run`.
 - NEVER guess paths. If the user has not said which folder, ask.
 - NEVER pipe document text into a cloud API. The pipeline is local-only.
+- **NEVER modify this file** (`.github/agents/ocr-router.agent.md`) during
+  a session. New learnings belong in `data/_feedback/corrections.jsonl`
+  (auto-written by the CLI), `config/routing-config.local.yaml`
+  (issuer/category rules added via the `issuer=…` / `category=…` prompt
+  during `skip`), or `__downloads__/<YYYY.MM> - PROCESSED_PDFS.md`
+  (auto-appended history). The agent file is static playbook only.
+- NEVER use `Remove-Item` — it is blocked by the tool policy. To delete,
+  `Move-Item` the file into `<project>\_trash\<YYYY-MM-DD>-<reason>\`
+  (the project's `_trash/` should be in `.gitignore`).
+
+## Routing conventions the user expects
+
+These rules live here (not in YAML) because they depend on the *filename
+or content*, not the keyword config alone:
+
+- **Owner-namespaced files**: when a filename contains `Luciana` and the
+  issuer is `Fidelity` (or any CC issuer flagged for that owner), the
+  destination is `Luciana\<issuer>\` instead of `Credit Card Statements\<issuer>\`.
+  Issuer suffix `(L)` triggers the same override; `(OZ)` / `(GV)` etc.
+  leave the file under the category root.
+- **Unpaid statements stay parked**: for `Credit Card Statements` and
+  `Bills`, if the PDF shows a future "payment due date" and the user has
+  not confirmed payment, prefer `park` over `move`. Always ask
+  "is this one paid yet?" before moving these.
+- **Currency** is auto-detected by the extractor (majority vote across
+  `$`, `S/`, `€`, `£`; defaults to `$` on ties). Soles statements
+  (Interbank / Peru AMEX Gold) come out as `S3.05` style. Confirm with
+  the user if a Peruvian doc came out as `$` (extractor missed it).
+- **Tax forms route to Tax Returns** regardless of issuer: any Form
+  1040/1098/1099/W-2/1095/5498/5500 → `Tax Returns/<year> Tax Return Related Documents/`.
+  The default config has this route template; if a tax form proposes a
+  different destination, override it with the user's confirmation.
+- **Auto Documentation taxonomy**: lives at
+  `Auto Documentation/{year} {Make} {Model}/{sub-topic}/` with
+  sub-topics like `Contract Related`, `Lease Agreement Docs`, `Manuals`,
+  `Title Documentation`, `Sale`, `Pickup`, `Order`, `Extended Warranty`.
+  Unpaid order confirmations stay parked in `__downloads__` until the
+  purchase closes — they do NOT go into Auto Documentation while in
+  order/quote state.
 
 ## Default paths
 
@@ -109,6 +148,16 @@ moves, OCR, renaming, manifest write, and feedback log entry.
 
 Summarize what happened: "Moved 4 files, parked 1, skipped 0. Manifest
 at `<path>`. History appended to `PROCESSED_PDFS.md`."
+
+If the user asked for any files to be **parked**, immediately verify:
+
+```powershell
+ocr-router feedback parked list
+```
+
+The parked filenames should match what the user requested. If anything
+is missing (historical bug — fixed in cli.py but worth a sanity check),
+say so and offer to re-park.
 
 ## Other capabilities the user may ask for
 

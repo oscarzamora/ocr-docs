@@ -91,3 +91,6 @@ backup/
 *.bundle
 scripts/sanitize-replacements*.txt
 scripts/sanitize-mailmap.txt
+
+# Reversible trash folder (do not commit)
+_trash/

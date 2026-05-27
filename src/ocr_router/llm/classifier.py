@@ -170,7 +170,11 @@ class LLMClassifier:
         # Reject category that the model invented (defensive — Ollama JSON
         # mode is strict but llamas occasionally hallucinate).
         if result is not None and result.category not in cats:
-            logger.warning("LLM returned invalid category %r; treating as failure", result.category)
+            logger.info(
+                "LLM proposed non-config category %r; falling back to keyword. "
+                "(Add it to routing-config.yaml `categories:` if it's a real folder.)",
+                result.category,
+            )
             return None, ClassifierCallInfo(
                 backend=info.backend, duration_ms=info.duration_ms,
                 fewshot_count=info.fewshot_count, prompt_chars=info.prompt_chars,
