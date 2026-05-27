@@ -30,8 +30,12 @@ organized Documents tree with human-in-the-loop confirmation.
 | Input (new downloads) | `C:\Users\ozamo\Documents\__downloads__` |
 | Output (organized Documents root) | `C:\Users\ozamo\Documents` |
 | Config | `config\routing-config.local.yaml` (fall back to `config\routing-config.yaml`) |
-| Feedback log | `C:\Users\ozamo\Documents\_feedback\corrections.jsonl` |
-| Embedding store | `C:\Users\ozamo\Documents\_feedback\examples.sqlite` |
+| Feedback log | `data\_feedback\corrections.jsonl` (project-local; never under Documents) |
+| Embedding store | `data\_feedback\examples.sqlite` (project-local) |
+
+Bookkeeping (logs + vector store + eval audits) lives inside the project
+folder, NOT under the user's Documents tree. The Documents tree is for the
+filed PDFs themselves only.
 
 Confirm these on first use of a workspace.
 

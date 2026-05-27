@@ -53,7 +53,7 @@ OcrEngine → PdfTextExtractor → MetadataExtractor → DocumentRouter → Fold
 
 ### Optional learning layers (L1–L6, all opt-in, all local)
 
-7. **`feedback/log.py`** — Append-only JSONL log under `<output>/_feedback/corrections.jsonl`. Every `process` run writes one `confirmed` / `skipped` / `parked` / `rule_added` record per file. `FeedbackLog.parked_filenames()` returns the active parked set (latest-record-wins across the lifecycle).
+7. **`feedback/log.py`** — Append-only JSONL log under `data/_feedback/corrections.jsonl` by default (project-local, gitignored). Every `process` run writes one `confirmed` / `skipped` / `parked` / `rule_added` record per file. `FeedbackLog.parked_filenames()` returns the active parked set (latest-record-wins across the lifecycle).
 8. **`feedback/bootstrap.py`** — Two pre-population modes: `bootstrap_from_downloads` parses `PROCESSED_PDFS.md` history, `bootstrap_from_tree` infers `(category, issuer, year)` from the organized Documents folder layout. Both run full OCR only when no text layer is present.
 9. **`feedback/store.py`** — SQLite-backed embedding store. `OllamaEmbedder(nomic-embed-text, 768-dim)` + `EmbeddingStore.search()` does cosine similarity via numpy matmul (no vector DB dependency). `index_log_into_store()` trims excerpts to `max_chars=6000` before embedding to stay under the embedder's 2048-token context.
 10. **`llm/classifier.py`** — `LLMClassifier` composes `OllamaBackend` (chat with `format='json'`) + `OllamaEmbedder` + `EmbeddingStore`. `fetch_neighbors()` trims the query text the same way. Defensively rejects categories the model invents.
@@ -101,7 +101,7 @@ The `process` command runs in distinct phases:
 
 **LLM is always opt-in.** Default config has `llm.enabled: false`; CLI flag `--no-llm` always wins. When Ollama is unreachable, `_maybe_build_llm_classifier` returns a `NullBackend`-wrapped classifier so the pipeline degrades to keyword-only with a single yellow warning. **Never** add a cloud LLM path silently — any cloud backend must require both an explicit env var AND an explicit `llm.cloud.enabled: true` opt-in (currently no cloud backend is implemented by design; this repo is local-only).
 
-**Data lives next to data.** Feedback log, embedding store, and eval audit logs all live under `<output>/_feedback/` (typically inside the user's OneDrive Documents), never inside the repo. The repo is just code. Default paths are resolved via `_resolve_feedback_path` and `_resolve_embed_db_path`, both honor env vars (`OCR_FEEDBACK_LOG`, `OCR_EMBEDDINGS_DB`) and config keys (`feedback.path`, `feedback.embeddings_db`).
+**Data lives in the project folder, not next to documents.** Feedback log, embedding store, and eval audit logs all default to `<cwd>/data/_feedback/` (gitignored). The `--output` flag points at the user's Documents tree (where filed PDFs live) but is NOT used for bookkeeping defaults. Override via env vars (`OCR_FEEDBACK_DIR`, `OCR_FEEDBACK_LOG`, `OCR_EMBEDDINGS_DB`) or config (`feedback.path`, `feedback.embeddings_db`). Resolution helpers: `_default_feedback_dir`, `_feedback_log_path`, `_resolve_feedback_path`, `_resolve_embed_db_path`.
 
 **Recovery point.** Tag `pre-l4-baseline` on `master` marks the last keyword-only commit before the L1–L6 work landed. Roll back via `git checkout pre-l4-baseline` if needed.
 

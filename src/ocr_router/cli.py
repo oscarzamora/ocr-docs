@@ -831,13 +831,37 @@ def _safe_relpath(path: Path, base: Path) -> str:
         return str(path)
 
 
+def _default_feedback_dir() -> Path:
+    """Default base dir for the feedback log + embedding store.
+
+    Resolution order:
+      1. ``OCR_FEEDBACK_DIR`` env var (explicit override, wins everywhere)
+      2. ``./data/_feedback/`` relative to the current working directory
+         — so files land **inside the project folder** when run from a
+         clone, never next to the user's documents.
+
+    The `--output` flag (Documents root) is intentionally NOT used as a
+    default here. The Documents root holds your *filed* PDFs; agent
+    bookkeeping (logs, vectors, audits) belongs alongside the code.
+    """
+    import os
+    env = os.environ.get("OCR_FEEDBACK_DIR")
+    if env:
+        return Path(env)
+    return Path.cwd() / "data" / "_feedback"
+
+
 def _feedback_log_path(output_dir: Path, config: dict) -> Path:
     """Resolve where to write the feedback JSONL log.
 
     Order of precedence:
-      1. ``OCR_FEEDBACK_LOG`` environment variable
-      2. ``feedback.path`` in routing config
-      3. ``<output_dir>/_feedback/corrections.jsonl`` (default)
+      1. ``OCR_FEEDBACK_LOG`` environment variable (full file path)
+      2. ``feedback.path`` in routing config (full file path)
+      3. ``<OCR_FEEDBACK_DIR>/corrections.jsonl`` (env-driven base dir)
+      4. ``<cwd>/data/_feedback/corrections.jsonl`` (default)
+
+    ``output_dir`` is accepted for back-compat but no longer used for
+    defaulting — bookkeeping never lives next to the user's documents.
     """
     import os
     env = os.environ.get("OCR_FEEDBACK_LOG")
@@ -846,7 +870,7 @@ def _feedback_log_path(output_dir: Path, config: dict) -> Path:
     cfg_path = (config or {}).get("feedback", {}).get("path")
     if cfg_path:
         return Path(cfg_path)
-    return output_dir / "_feedback" / "corrections.jsonl"
+    return _default_feedback_dir() / "corrections.jsonl"
 
 
 def _now_str() -> str:
@@ -1040,7 +1064,13 @@ def feedback():
 
 
 def _resolve_feedback_path(output: Optional[str], config: Optional[str]) -> Path:
-    """Mirror of process()'s log path resolution for feedback subcommands."""
+    """Mirror of process()'s log path resolution for feedback subcommands.
+
+    Same precedence as ``_feedback_log_path`` (env var, then config, then
+    the default project-local ``data/_feedback/``). ``output`` is accepted
+    for back-compat but no longer needed — bookkeeping defaults to the
+    project folder, not the Documents tree.
+    """
     import os
     env = os.environ.get("OCR_FEEDBACK_LOG")
     if env:
@@ -1054,12 +1084,7 @@ def _resolve_feedback_path(output: Optional[str], config: Optional[str]) -> Path
     cfg_path = (cfg_dict or {}).get("feedback", {}).get("path")
     if cfg_path:
         return Path(cfg_path)
-    if output:
-        return Path(output) / "_feedback" / "corrections.jsonl"
-    raise click.UsageError(
-        "Cannot resolve feedback log path. "
-        "Set OCR_FEEDBACK_LOG, or pass --output, or set feedback.path in config."
-    )
+    return _default_feedback_dir() / "corrections.jsonl"
 
 
 @feedback.command("stats")

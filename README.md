@@ -296,23 +296,28 @@ python -m ocr_router eval --root "...\Documents" --sample 200 --llm
 
 ### How the data layers fit together
 
-| Layer | Location | Purpose | Built by |
+| Layer | Default location | Purpose | Built by |
 |---|---|---|---|
-| Feedback log | `<output>/_feedback/corrections.jsonl` | Audit trail of every classify / skip / park / correction | `process`, `feedback bootstrap*` |
-| Embedding store | `<output>/_feedback/examples.sqlite` | Vector index of past confirmed decisions | `feedback embed` |
-| Eval audit log | `<output>/_feedback/eval-<ts>.jsonl` | Per-file accuracy record from one eval run | `eval` |
+| Feedback log | `data/_feedback/corrections.jsonl` (project-local) | Audit trail of every classify / skip / park / correction | `process`, `feedback bootstrap*` |
+| Embedding store | `data/_feedback/examples.sqlite` (project-local) | Vector index of past confirmed decisions | `feedback embed` |
+| Eval audit log | `data/_feedback/eval-<ts>.jsonl` (project-local) | Per-file accuracy record from one eval run | `eval` |
 
-All three live **next to your documents**, never inside the repo. The repo is just code.
+All three live **inside the project folder** (in `data/_feedback/`, which is
+gitignored). They never touch the Documents tree you point `--output` at —
+the Documents tree holds only your filed PDFs.
+
+Override locations:
+- Env vars: `OCR_FEEDBACK_DIR`, `OCR_FEEDBACK_LOG`, `OCR_EMBEDDINGS_DB`
+- Config keys: `feedback.path`, `feedback.embeddings_db`
 
 ### Privacy
 
 - Document text never leaves your machine (Ollama runs locally; the codebase has no cloud
   fallback by design).
 - The feedback log stores a configurable text excerpt per record (default 2000 chars,
-  trimmed to a single page worth of OCR). Keep it under your already-private OneDrive /
-  Documents tree.
+  trimmed to a single page worth of OCR). It is gitignored.
 - The embedding store contains those same excerpts plus their 768-dim vectors — same
-  privacy posture as the log.
+  privacy posture as the log, same gitignore.
 
 ### Rollback
 

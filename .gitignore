@@ -41,6 +41,7 @@ wheels/
 data/input/
 data/output/
 data/processed/
+data/_feedback/
 manifest.csv
 manifest.jsonl
 PROCESSED_PDFS.md

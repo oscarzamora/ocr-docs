@@ -164,15 +164,17 @@ history:
 # Every confirmed, skipped, and rule-added decision is appended here as JSONL.
 # It feeds future learning layers (YAML auto-tune, embeddings, LLM few-shot).
 # Override location with OCR_FEEDBACK_LOG env var, or set feedback.path below.
-# Default: <output_dir>/_feedback/corrections.jsonl
+# Default: ./data/_feedback/corrections.jsonl  (relative to your current
+# working directory — typically the project folder when run from a clone).
+# Bookkeeping is NEVER stored next to your filed Documents.
 feedback:
-  # path: "C:\\Users\\<user>\\Documents\\_feedback\\corrections.jsonl"
+  # path: "data/_feedback/corrections.jsonl"
 
   # SQLite embedding store (L3). Populated incrementally by
   # `ocr-router feedback embed`. Override location with OCR_EMBEDDINGS_DB env
   # var, or set feedback.embeddings_db below.
-  # Default: sibling of the feedback log -> <feedback_dir>/examples.sqlite
-  # embeddings_db: "C:\\Users\\<user>\\Documents\\_feedback\\examples.sqlite"
+  # Default: sibling of the feedback log -> ./data/_feedback/examples.sqlite
+  # embeddings_db: "data/_feedback/examples.sqlite"
 
 # Local-first LLM classifier (L4). Off by default — your run is 100%
 # deterministic until you flip enabled: true.
