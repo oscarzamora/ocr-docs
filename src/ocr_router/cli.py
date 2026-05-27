@@ -53,6 +53,17 @@ class Proposal:
     dest_file: Path          # final path (collision-resolved)
     issues: list[str] = field(default_factory=list)
 
+    # ── L4 LLM diagnostics (populated only when --llm) ─────────────────────
+    keyword_category: Optional[str] = None        # what keyword router said
+    llm_category: Optional[str] = None            # what LLM said
+    llm_issuer: Optional[str] = None
+    llm_confidence: Optional[float] = None
+    llm_reasons: list[str] = field(default_factory=list)
+    backend_label: str = "keyword"                # keyword | local:llama3.2:3b | hybrid
+    llm_duration_ms: Optional[int] = None
+    llm_fewshot_count: Optional[int] = None
+    llm_error: Optional[str] = None
+
 
 @click.group()
 @click.version_option()
@@ -76,12 +87,17 @@ def cli():
               help='Show proposals and exit without moving anything')
 @click.option('--interactive/--no-interactive', '-i', default=True,
               help='Show review table and confirm before moving files (default: on)')
+@click.option('--llm/--no-llm', default=None,
+              help='Ask local LLM (Ollama) for a second opinion. '
+                   'Default: follow config llm.enabled.')
 def process(input: str, output: str, config: str, max_files: int,
-            skip_ocr: bool, archive: bool, dry_run: bool, interactive: bool):
+            skip_ocr: bool, archive: bool, dry_run: bool, interactive: bool,
+            llm: Optional[bool]):
     """Process PDFs: OCR → extract → classify → rename → route.
 
     By default shows a full review table before moving any file.
     Use --no-interactive to skip confirmation (batch / cron mode).
+    Use --llm to add an LLM second opinion (Ollama required).
     """
     try:
         cfg = load_config(config)
@@ -95,6 +111,17 @@ def process(input: str, output: str, config: str, max_files: int,
         resolver   = FolderResolver(output_dir)
         manifest_writer = ManifestWriter(output_dir, cfg.model_dump())
         feedback_log = FeedbackLog(_feedback_log_path(output_dir, cfg.model_dump()))
+
+        # ── LLM classifier setup (Step 5) ──────────────────────────────────
+        llm_classifier = _maybe_build_llm_classifier(
+            cfg.model_dump(), config, output_dir, cli_override=llm,
+        )
+        if llm_classifier.enabled:
+            console.print(
+                f"[dim]LLM: {llm_classifier.backend.label} "
+                f"(few-shot k={llm_classifier.llm_cfg.fewshot_k}, "
+                f"threshold={llm_classifier.llm_cfg.confidence_threshold})[/]"
+            )
 
         if not skip_ocr and not ocr_engine.is_available():
             console.print(f"[yellow]⚠  PDF24 not found — proceeding text-only (--skip-ocr)[/]")
@@ -140,7 +167,31 @@ def process(input: str, output: str, config: str, max_files: int,
                     continue
 
                 metadata = extractor.extract_from_text(text, pdf_file.name)
-                category = router.classify_document(text)
+                keyword_category = router.classify_document(text)
+                category = keyword_category
+
+                # ── LLM second opinion (Step 5) ───────────────────────────
+                llm_result, llm_info = None, None
+                backend_label = "keyword"
+                if llm_classifier.enabled:
+                    llm_result, llm_info = llm_classifier.classify(
+                        text=text, filename=pdf_file.name,
+                        # Make sure the LLM can pick the keyword's category even
+                        # if it's "Uncategorized" (not in config.categories).
+                        extra_categories=[keyword_category] if keyword_category else None,
+                    )
+                    if llm_result is not None:
+                        backend_label, category, llm_issuer_override = _apply_llm_decision(
+                            keyword_category=keyword_category,
+                            llm_result=llm_result,
+                            threshold=llm_classifier.llm_cfg.confidence_threshold,
+                            issues=issues,
+                        )
+                        # Adopt the LLM's issuer when keyword extraction got nothing
+                        # or when we're taking the LLM's category outright.
+                        if llm_issuer_override and not metadata.get("issuer"):
+                            metadata["issuer"] = llm_issuer_override
+
                 metadata['category'] = category
 
                 route_path = router.build_route_path(category, metadata)
@@ -166,6 +217,15 @@ def process(input: str, output: str, config: str, max_files: int,
                     new_filename=new_filename,
                     dest_file=dest_file,
                     issues=issues,
+                    keyword_category=keyword_category,
+                    llm_category=llm_result.category if llm_result else None,
+                    llm_issuer=llm_result.issuer if llm_result else None,
+                    llm_confidence=llm_result.confidence if llm_result else None,
+                    llm_reasons=list(llm_result.reasons) if llm_result else [],
+                    backend_label=backend_label,
+                    llm_duration_ms=llm_info.duration_ms if llm_info else None,
+                    llm_fewshot_count=llm_info.fewshot_count if llm_info else None,
+                    llm_error=llm_info.error if llm_info else None,
                 ))
 
         # ── Phase 2: review table ────────────────────────────────────────────
@@ -220,7 +280,12 @@ def process(input: str, output: str, config: str, max_files: int,
                         proposed_folder=_safe_relpath(p.dest_dir, output_dir),
                         proposed_filename=p.new_filename,
                         proposed_confidence=p.confidence,
-                        backend="keyword",
+                        backend=p.backend_label,
+                        extra={
+                            "keyword_category": p.keyword_category,
+                            "llm_category": p.llm_category,
+                            "llm_confidence": p.llm_confidence,
+                        },
                     ))
                 except Exception:                                    # pragma: no cover
                     pass
@@ -282,8 +347,15 @@ def process(input: str, output: str, config: str, max_files: int,
                         final_issuer=p.metadata.get("issuer"),
                         final_folder=final_folder,
                         final_filename=p.dest_file.name,
-                        backend="keyword",
-                        extra={"action_mode": action_mode},
+                        backend=p.backend_label,
+                        extra={
+                            "action_mode": action_mode,
+                            "keyword_category": p.keyword_category,
+                            "llm_category": p.llm_category,
+                            "llm_confidence": p.llm_confidence,
+                            "llm_duration_ms": p.llm_duration_ms,
+                            "llm_fewshot_count": p.llm_fewshot_count,
+                        },
                     ))
                 except Exception:                                    # pragma: no cover
                     pass
@@ -321,6 +393,8 @@ def process(input: str, output: str, config: str, max_files: int,
 
 def _print_proposals(proposals: list[Proposal], output_dir: Path) -> None:
     """Render the full review table."""
+    has_llm = any(p.llm_category is not None or p.llm_error is not None for p in proposals)
+
     t = Table(
         title=f"\n[bold]Proposed moves — {len(proposals)} file(s)[/]",
         box=box.ROUNDED,
@@ -328,12 +402,14 @@ def _print_proposals(proposals: list[Proposal], output_dir: Path) -> None:
         highlight=True,
     )
     t.add_column("#",             style="dim",     width=3,  no_wrap=True)
-    t.add_column("Original File", style="cyan",    width=30, no_wrap=True)
-    t.add_column("Category",      style="green",   width=24, no_wrap=True)
+    t.add_column("Original File", style="cyan",    width=28, no_wrap=True)
+    t.add_column("Category",      style="green",   width=22, no_wrap=True)
     t.add_column("Issuer",        style="yellow",  width=18, no_wrap=True)
-    t.add_column("New Name",      style="white",   width=40, no_wrap=True)
+    t.add_column("New Name",      style="white",   width=36, no_wrap=True)
     t.add_column("Amount",        style="magenta", width=10, no_wrap=True)
-    t.add_column("Destination",   style="blue",    width=35)
+    if has_llm:
+        t.add_column("Backend",   style="white",   width=22, no_wrap=False)
+    t.add_column("Destination",   style="blue",    width=30)
 
     for p in proposals:
         issuer   = p.metadata.get('issuer') or '—'
@@ -346,17 +422,138 @@ def _print_proposals(proposals: list[Proposal], output_dir: Path) -> None:
             dest = str(p.dest_dir)
         notes    = ', '.join(p.issues) if p.issues else ''
 
-        t.add_row(
+        row = [
             str(p.index),
-            p.pdf_file.name[:30],
+            p.pdf_file.name[:28],
             p.category,
             issuer[:18],
-            p.new_filename[:40],
+            p.new_filename[:36],
             amt_str,
-            dest + (f'  [dim]{notes}[/]' if notes else ''),
-        )
+        ]
+        if has_llm:
+            row.append(_format_backend_cell(p))
+        row.append(dest + (f'  [dim]{notes}[/]' if notes else ''))
+
+        t.add_row(*row)
 
     console.print(t)
+
+
+def _format_backend_cell(p: Proposal) -> str:
+    """Render the Backend column for one proposal."""
+    if p.llm_error:
+        return f"[red]llm err[/] [dim]{p.llm_error[:18]}[/]"
+    if p.llm_category is None:
+        return "[dim]keyword[/]"
+
+    conf = f"{p.llm_confidence:.2f}" if p.llm_confidence is not None else "?"
+    agree = p.keyword_category == p.llm_category
+    if p.backend_label.startswith("hybrid-llm"):
+        # We overrode keyword with LLM
+        return (f"[magenta]LLM ✱[/] [bold]{conf}[/]\n"
+                f"[dim]kw said: {p.keyword_category or '—'}[/]")
+    if p.backend_label == "keyword-llm-low-conf":
+        return (f"[yellow]kw (LLM low)[/] [dim]{conf}[/]\n"
+                f"[dim]LLM said: {p.llm_category}[/]")
+    if agree:
+        return f"[green]agree ✓[/] [bold]{conf}[/]"
+    return f"[blue]kw[/] [dim]LLM {conf}[/]"
+
+
+def _apply_llm_decision(
+    *,
+    keyword_category: str,
+    llm_result,
+    threshold: float,
+    issues: list[str],
+) -> tuple[str, str, Optional[str]]:
+    """Decide the final category from keyword + LLM verdicts.
+
+    Returns (backend_label, final_category, llm_issuer_override).
+
+    Rules:
+      * LLM confidence < threshold        → keep keyword, surface as a note
+      * LLM agrees with keyword           → keep both, no flag
+      * LLM disagrees and is confident    → take the LLM's category, flag for HITL
+      * Keyword said 'Uncategorized' and LLM has any answer above threshold → take LLM
+    """
+    llm_cat = llm_result.category
+    llm_conf = float(llm_result.confidence)
+    llm_iss = llm_result.issuer
+
+    # Below threshold: trust keyword, surface LLM opinion as a hint
+    if llm_conf < threshold:
+        if llm_cat and llm_cat != keyword_category:
+            issues.append(f"LLM suggests {llm_cat} ({llm_conf:.2f})")
+        return "keyword-llm-low-conf", keyword_category, None
+
+    # Agreement
+    if llm_cat == keyword_category:
+        # Even on agreement, adopt the LLM issuer if it spotted one
+        return "agree", keyword_category, llm_iss
+
+    # Disagreement, LLM confident
+    if not keyword_category or keyword_category == "Uncategorized":
+        # Keyword had no opinion → defer to LLM silently
+        return "hybrid-llm", llm_cat, llm_iss
+
+    # Genuine disagreement
+    issues.append(
+        f"LLM says {llm_cat} ({llm_conf:.2f}), keyword says {keyword_category}"
+    )
+    return "hybrid-llm-disagree", llm_cat, llm_iss
+
+
+def _maybe_build_llm_classifier(
+    config: dict,
+    config_path: Optional[str],
+    output_dir: Path,
+    *,
+    cli_override: Optional[bool] = None,
+):
+    """Build an LLMClassifier respecting CLI/config gating.
+
+    Returns a classifier whose ``.enabled`` is False when LLM is off — no
+    network calls happen in that case. When on, performs a one-time probe;
+    if Ollama is down, returns a NullBackend-wrapped classifier so the
+    pipeline degrades gracefully.
+    """
+    from ocr_router.feedback import (
+        DEFAULT_EMBED_MODEL, EmbeddingStore, OllamaEmbedder,
+    )
+    from ocr_router.llm import LLMClassifier, NullBackend, OllamaBackend
+    from ocr_router.llm.classifier import LLMConfig
+
+    llm_cfg = LLMConfig.from_dict(config)
+    enabled = llm_cfg.enabled if cli_override is None else cli_override
+    if not enabled:
+        return LLMClassifier(backend=NullBackend("LLM off"), config=config)
+
+    backend = OllamaBackend(model=llm_cfg.local_model, host=llm_cfg.host)
+    info = backend.info()
+    if not info.available:
+        console.print(
+            f"[yellow]⚠ LLM requested but unavailable ({info.note}); "
+            "falling back to keyword-only.[/]"
+        )
+        return LLMClassifier(
+            backend=NullBackend(info.note or "Ollama unavailable"),
+            config=config,
+        )
+
+    embedder = OllamaEmbedder(
+        model=llm_cfg.embed_model or DEFAULT_EMBED_MODEL, host=llm_cfg.host,
+    )
+    db_path = _resolve_embed_db_path(str(output_dir), config_path)
+    store = EmbeddingStore(db_path) if db_path.exists() else None
+    if store is None:
+        console.print(
+            f"[dim]LLM: embedding store missing ({db_path}); few-shot disabled.[/]"
+        )
+
+    return LLMClassifier(
+        backend=backend, embedder=embedder, store=store, config=config,
+    )
 
 
 def _ask_action_mode() -> Optional[str]:
