@@ -120,13 +120,20 @@ Interactive flow (PDF + JPEG inputs):
 
 ---
 
-## 3. Can This Work With Llama3?
+## 3. Two Ways to Use the LLM (TL;DR)
 
-**Yes — and it now ships with a built-in local-first integration.** See Section 6 below for the full
-LLM-assisted classifier (`llama3.2:3b` via Ollama, with few-shot from your past confirmed decisions).
+The pipeline is **deterministic by default** (keyword scoring). The local LLM (`llama3.2:3b`
+via Ollama) is an **opt-in second opinion**. There are two distinct ways to use it:
 
-The core pipeline still works offline with **zero** LLM dependency. The LLM is off by default;
-turn it on per-run with `--llm` or in config with `llm.enabled: true`.
+| Mode | What you run | Where the LLM helps | When to pick this |
+|---|---|---|---|
+| **(A) Standalone CLI with `--llm`** | `ocr-router process ... --llm` in any terminal | Classifies each doc, parses your free-form replies at the confirm prompt | You like the terminal, want a single command, scripting, cron jobs |
+| **(B) `@OCR Router` agent in VS Code Chat** | Type `@OCR Router process ...` in Copilot chat | Same as above PLUS the agent translates natural-language goals into the right CLI commands and confirms each step in chat | You want conversational HITL, you're already in VS Code, multi-step asks |
+
+Both modes share the **exact same pipeline, same feedback log, same embedding store**. Mode B is a
+thin chat wrapper over Mode A — nothing magical, just a friendlier surface.
+
+Sections 6 (standalone) and 7 (agent mode) below give the full setup and examples for each.
 
 ---
 
@@ -236,22 +243,27 @@ python -m ocr_router eval `
 ## 6. Local LLM + Feedback Loop (Optional)
 
 OCR Router ships with an opt-in **local-first LLM stack** that runs entirely on your machine.
-No cloud, no API keys, no document data leaves your computer. With it enabled the pipeline:
+**No cloud, no API keys, no document data leaves your computer.**
 
-1. Runs the keyword router (today's behavior).
+With it enabled the pipeline:
+
+1. Runs the keyword router (default behavior — fully deterministic).
 2. Asks `llama3.2:3b` via [Ollama](https://ollama.com/) for a second opinion, with the
    `k` most-similar past confirmed decisions injected as few-shot exemplars.
 3. Applies a simple decision rule: agreement → confident, disagreement → flag for HITL,
    low LLM confidence → keep keyword + show hint.
-4. Logs every decision (and every correction you make) to a JSONL feedback log so the
+4. **At the confirm prompt, parses your free-form English** ("skip 2 because I haven't paid")
+   into structured actions (`park_some [2]`, note "haven't paid") with a transparent
+   `Understood: …` recap.
+5. Logs every decision (and every correction you make) to a JSONL feedback log so the
    classifier learns from your taxonomy over time.
 
-### Setup
+### One-time setup
 
 ```powershell
 # 1. Install Ollama (https://ollama.com), then pull the two models
-ollama pull llama3.2:3b
-ollama pull nomic-embed-text
+ollama pull llama3.2:3b           # ~2 GB — chat model
+ollama pull nomic-embed-text       # ~270 MB — embeddings for few-shot
 
 # 2. Enable LLM in your local config
 #    Add to config/routing-config.local.yaml:
@@ -261,37 +273,60 @@ ollama pull nomic-embed-text
 #         fewshot_k: 5
 
 # 3. (One time) Bootstrap the feedback log from your existing organized tree
-python -m ocr_router feedback bootstrap-tree `
-  --root "C:\Users\<user>\Documents"
+python -m ocr_router feedback bootstrap-tree --root "C:\Users\<user>\Documents"
 
 # 4. (One time) Embed all bootstrapped records into the local SQLite vector store
-python -m ocr_router feedback embed --output "C:\Users\<user>\Documents"
+python -m ocr_router feedback embed
 
 # 5. Verify the stack is healthy
-python -m ocr_router llm doctor --output "C:\Users\<user>\Documents"
+python -m ocr_router llm doctor
 ```
 
-### Daily workflow
+### Daily workflow (standalone CLI)
 
 ```powershell
-# Process new downloads with the LLM advisor enabled
-python -m ocr_router process --input "...\__downloads__" --output "...\Documents" --llm
+# Always dry-run first — see what would happen, nothing moves yet
+python -m ocr_router process `
+  --input  "C:\Users\<user>\Documents\__downloads__" `
+  --output "C:\Users\<user>\Documents" `
+  --config config\routing-config.local.yaml `
+  --llm --dry-run
 
-# At the confirmation prompt:
-#   Enter       move ALL files
-#   1,3,5       move ONLY those numbers
-#   skip 2,4    move all EXCEPT those numbers
-#   park 7      keep those files in place permanently (never re-propose them)
-#   q           quit
+# When the proposal table looks right, run for real (no --dry-run)
+python -m ocr_router process `
+  --input  "C:\Users\<user>\Documents\__downloads__" `
+  --output "C:\Users\<user>\Documents" `
+  --config config\routing-config.local.yaml `
+  --llm
+```
 
-# Inspect what the pipeline has learned
-python -m ocr_router feedback stats   --output "...\Documents"
-python -m ocr_router feedback show    --output "...\Documents" --limit 20
+At the confirm prompt you can type either deterministic syntax OR natural language:
+
+```text
+# Deterministic (always works, no LLM required):
+Enter             move ALL files
+1,3,5             move ONLY those numbers
+skip 2,4          move all EXCEPT those numbers
+park 7            keep those files in place permanently (never re-propose)
+park 7 note: <r>  same as park, capture the reason verbatim
+q                 quit without moving anything
+
+# Natural language (requires --llm; uses LLM to parse intent):
+skip 2 because I haven't paid yet              → park 2 + note (per unpaid convention)
+park the FPL one, it's a duplicate             → asks for the file number if ambiguous
+move 1 3 5, the others are for Luciana         → moves 1,3,5; skipped get rule prompt
+4 is actually FPL not AT&T                     → adds issuer rule to local YAML
+nevermind / cancel                             → quit
+```
+
+### Inspect what the pipeline has learned
+
+```powershell
+python -m ocr_router feedback stats                # counts by event/category/backend
+python -m ocr_router feedback show --limit 20      # most recent records (with Note column)
 python -m ocr_router feedback search "AMEX credit card statement"
-python -m ocr_router feedback parked list
-
-# Measure accuracy against your real folder layout
-python -m ocr_router eval --root "...\Documents" --sample 200 --llm
+python -m ocr_router feedback parked list          # files marked "keep in place"
+python -m ocr_router eval --root "C:\Users\<user>\Documents" --sample 200 --llm
 ```
 
 ### How the data layers fit together
@@ -306,32 +341,34 @@ All three live **inside the project folder** (in `data/_feedback/`, which is
 gitignored). They never touch the Documents tree you point `--output` at —
 the Documents tree holds only your filed PDFs.
 
-Override locations:
+Override locations (when you want them elsewhere):
 - Env vars: `OCR_FEEDBACK_DIR`, `OCR_FEEDBACK_LOG`, `OCR_EMBEDDINGS_DB`
 - Config keys: `feedback.path`, `feedback.embeddings_db`
 
 ### Privacy
 
-- Document text never leaves your machine (Ollama runs locally; the codebase has no cloud
-  fallback by design).
-- The feedback log stores a configurable text excerpt per record (default 2000 chars,
-  trimmed to a single page worth of OCR). It is gitignored.
+- Document text **never leaves your machine** — Ollama runs locally; the codebase has no
+  cloud fallback by design.
+- The feedback log stores a configurable text excerpt per record (default 2000 chars).
+  It is gitignored.
 - The embedding store contains those same excerpts plus their 768-dim vectors — same
   privacy posture as the log, same gitignore.
+- The sanitize gate (`scripts/sanitize_check.py`) blocks any commit that contains
+  personal names, real Windows user paths, or OneDrive references. Same gate runs in CI.
 
 ### Rollback
 
 Three independent ways to disable the LLM stack:
 
 ```powershell
-# Per-run override
+# Per-run override (keeps config as-is)
 python -m ocr_router process ... --no-llm
 
 # Disable in config
 #   llm:
 #     enabled: false
 
-# Full revert to pre-L4 keyword-only baseline (preserved as a tag)
+# Full revert to pre-L4 keyword-only baseline (preserved as an annotated git tag)
 git checkout pre-l4-baseline
 ```
 
@@ -339,34 +376,62 @@ git checkout pre-l4-baseline
 
 ## 7. Agent Mode (`@OCR Router` in VS Code Copilot Chat)
 
-Instead of typing CLI commands, you can drive the pipeline from VS Code Copilot
-chat. The repo ships with a workspace agent definition at
-`.github/agents/ocr-router.agent.md`.
+Same pipeline as Section 6, but driven through chat instead of a terminal. The repo
+ships with a workspace agent definition at `.github/agents/ocr-router.agent.md`.
 
-### Setup
+### Why agent mode (vs the standalone CLI)
+
+| Capability | Standalone CLI (`--llm`) | `@OCR Router` agent mode |
+|---|---|---|
+| Same pipeline, same feedback log, same SQLite store | ✓ | ✓ |
+| Local LLM (`llama3.2:3b` via Ollama) | ✓ | ✓ |
+| Natural-language confirm replies | ✓ (intent parser) | ✓ (intent parser + chat agent translates the broader request) |
+| Multi-step asks (`scan and run an eval after, show me parked`) | ❌ separate commands | ✓ agent stitches them |
+| Renders proposal tables as clean Markdown in chat | ❌ terminal box-drawing | ✓ |
+| Per-session memory of input/output folders | ❌ | ✓ (asks once, remembers) |
+| Honors the **routing conventions** in the agent playbook (owner-namespaced files, unpaid-statements stay parked, tax forms → Tax Returns) | partial (config only) | ✓ (agent applies the conventions even when keyword/LLM disagree) |
+| Works from any chat client (Cursor, Claude Desktop, Windsurf, …) | n/a | only VS Code Copilot today; MCP server is the natural next step |
+
+Use **CLI** for scripts, cron jobs, terminal-only workflows. Use **agent mode** for
+conversational HITL and when you want the agent to apply conventions that don't fit
+neatly into the YAML config.
+
+### Setup (assumes Section 6 is already done)
 
 1. Open this workspace in VS Code with the GitHub Copilot extension installed.
 2. Restart the chat window once so the agent gets picked up.
-3. Type `@` in the chat input — you should see `@OCR Router` in the picker.
+3. In the **chat input mode picker** (bottom-left of the chat panel), pick **Agent**.
+4. Click the agent dropdown → **OCR Router**.
 
 ### Use it
 
 ```text
-You:         @OCR Router scan my downloads
-@OCR Router: [runs --dry-run, shows a Markdown table of proposed moves
-              with a Backend column — agree/LLM/keyword and confidence]
-You:         park 4, rename 3 to "2026.05 - Chase Checking Statement.pdf", go
-@OCR Router: [executes — moves 6, parks 1, renames 1; updates feedback log]
+You:         Process my downloads with LLM
+
+@OCR Router: Which folder should I scan and which folder is your organized documents root?
+
+You:         C:\Users\me\Documents\__downloads__ → C:\Users\me\Documents
+
+@OCR Router: [runs `process --llm --dry-run`, posts a Markdown table of proposals
+              with the Backend column — agree ✓ / LLM ✱ / kw / llm err]
+
+You:         park 2 because I haven't paid, the rest go
+
+@OCR Router: Understood: park #2 — "I haven't paid", move the rest.
+             [runs without --dry-run, applies the selection, writes feedback log
+              with the note attached, appends Notes block to PROCESSED_PDFS.md]
+             Moved 3, parked 1, skipped 0. ✓
 ```
 
-The agent reuses the same `ocr-router` CLI under the hood, so every move
-is also logged to `corrections.jsonl` and feeds future runs through the
-embedding store.
+The agent reuses the same `ocr-router` CLI under the hood, so every move is
+logged to `corrections.jsonl` and feeds future runs through the embedding store.
+**Your personalization stays local** — the agent never edits the playbook file
+or sends data anywhere outside your machine.
 
 ### Make it available in every workspace
 
-Copy the agent file once to your user profile so `@OCR Router` works in any
-project you open:
+Copy the agent file once to your VS Code user profile so `@OCR Router` works in
+any project you open:
 
 ```powershell
 # VS Code user prompts folder (Windows)
@@ -375,16 +440,21 @@ New-Item -ItemType Directory -Path $dst -Force | Out-Null
 Copy-Item .github\agents\ocr-router.agent.md $dst\
 ```
 
-After the copy, the agent is discoverable in every workspace — even ones
-that don't contain this repo. Make sure `ocr-router` is on your PATH
-(install via `pipx` as shown in Section 1).
+After the copy, the agent is discoverable everywhere — even workspaces that don't
+contain this repo. Make sure `ocr-router` is on your PATH (install via `pipx` as
+shown in Section 1).
 
 ### What the agent does NOT do
 
-- **No silent moves** — every run starts with `--dry-run` and waits for `go`.
-- **No cloud calls** — the pipeline is local-only.
-- **No code edits** — it only invokes the CLI.
-- **No bypass of `park`** — files you parked stay parked.
+- **No silent moves** — every run starts with `--dry-run` and waits for your confirmation
+- **No cloud calls** — the pipeline is local-only, by design (no cloud backend exists)
+- **No code edits** — the agent only invokes the CLI, never writes Python
+- **No bypass of `park`** — files you parked stay parked until you `unpark` them
+- **Never modifies its own playbook** (`.github/agents/ocr-router.agent.md`) — that file
+  is static. Learnings go to `corrections.jsonl`, `routing-config.local.yaml`, or
+  `PROCESSED_PDFS.md`, all of which are gitignored / your own
+- **No personal info in the repo** — the sanitize gate blocks any commit that contains
+  names or real Windows user paths; same gate runs in CI
 
 ---
 
