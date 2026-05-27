@@ -148,3 +148,37 @@ manifest:
     - ocr_confidence
     - routed_to
     - timestamp
+
+# Learning / feedback log (L1)
+# Every confirmed, skipped, and rule-added decision is appended here as JSONL.
+# It feeds future learning layers (YAML auto-tune, embeddings, LLM few-shot).
+# Override location with OCR_FEEDBACK_LOG env var, or set feedback.path below.
+# Default: <output_dir>/_feedback/corrections.jsonl
+feedback:
+  # path: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\corrections.jsonl"
+
+  # SQLite embedding store (L3). Populated incrementally by
+  # `ocr-router feedback embed`. Override location with OCR_EMBEDDINGS_DB env
+  # var, or set feedback.embeddings_db below.
+  # Default: sibling of the feedback log -> <feedback_dir>/examples.sqlite
+  # embeddings_db: "C:\\Users\\me\\OneDrive\\Documents\\_feedback\\examples.sqlite"
+
+# Local-first LLM classifier (L4). Off by default — your run is 100%
+# deterministic until you flip enabled: true.
+# Requires `ollama serve` running and the models pulled, e.g.:
+#   ollama pull llama3.2:3b
+#   ollama pull nomic-embed-text
+llm:
+  enabled: false
+  # When LLM disagrees with keyword scoring, route the doc to HITL if the
+  # LLM's own confidence is below this threshold.
+  confidence_threshold: 0.6
+  # Number of most-similar past confirmed decisions to inject into the prompt.
+  # Set to 0 to disable few-shot.
+  fewshot_k: 5
+  local:
+    model: "llama3.2:3b"          # any tagged Ollama chat model
+    # host: "http://localhost:11434"
+    timeout_s: 30
+  embedder:
+    model: "nomic-embed-text"

@@ -32,6 +32,9 @@ The tool emphasizes safety and reviewability:
 - Density-aware folder resolver
 - Manifest output in CSV and JSONL
 - Privacy guardrails for public repositories
+- **Optional local LLM second-opinion classifier** (Ollama, no cloud, no API keys) — see Section 6
+- **Feedback log + embedding store** — pipeline learns from your past corrections
+- **Eval mode** — measure classifier accuracy against your organized tree
 
 ---
 
@@ -96,31 +99,11 @@ Interactive flow (PDF + JPEG inputs):
 
 ## 3. Can This Work With Llama3?
 
-Yes, as an optional integration.
+**Yes — and it now ships with a built-in local-first integration.** See Section 6 below for the full
+LLM-assisted classifier (`llama3.2:3b` via Ollama, with few-shot from your past confirmed decisions).
 
-Important: Llama3 is not required and is not hard-coded in the core pipeline. OCR Router works out-of-the-box with rule-based classification.
-
-### Recommended integration approach
-
-Use Llama3 as a fallback classifier only when rule confidence is low.
-
-1. Run OCR Router extraction first (text + metadata).
-2. If score is below threshold, call Llama3 (for example via Ollama).
-3. Return one of your known categories.
-4. Keep deterministic naming/routing in OCR Router.
-
-Example local Ollama call (Llama3):
-
-```powershell
-curl http://localhost:11434/api/generate `
-  -d '{"model":"llama3","prompt":"Classify this document into one of: Bills, Credit Card Statements, Tax Returns, Receipts. Text: ...","stream":false}'
-```
-
-Good practice:
-
-- Keep category output constrained to allowed labels.
-- Log model decisions in manifest notes.
-- Do not send private document text to external hosted APIs unless you explicitly want cloud inference.
+The core pipeline still works offline with **zero** LLM dependency. The LLM is off by default;
+turn it on per-run with `--llm` or in config with `llm.enabled: true`.
 
 ---
 
@@ -207,6 +190,123 @@ python -m ocr_router.cli review --manifest "C:\Docs\Sorted\manifest.jsonl"
 python scripts/sanitize_check.py
 ```
 
+### Example F: Process with LLM second opinion (after Section 6 setup)
+
+```powershell
+python -m ocr_router process `
+  --input  "C:\Users\me\OneDrive\Documents\__downloads__" `
+  --output "C:\Users\me\OneDrive\Documents" `
+  --config config/routing-config.local.yaml `
+  --llm
+```
+
+### Example G: Measure accuracy (eval mode, read-only)
+
+```powershell
+python -m ocr_router eval `
+  --root "C:\Users\me\OneDrive\Documents" `
+  --sample 200 --llm
+```
+
+---
+
+## 6. Local LLM + Feedback Loop (Optional)
+
+OCR Router ships with an opt-in **local-first LLM stack** that runs entirely on your machine.
+No cloud, no API keys, no document data leaves your computer. With it enabled the pipeline:
+
+1. Runs the keyword router (today's behavior).
+2. Asks `llama3.2:3b` via [Ollama](https://ollama.com/) for a second opinion, with the
+   `k` most-similar past confirmed decisions injected as few-shot exemplars.
+3. Applies a simple decision rule: agreement → confident, disagreement → flag for HITL,
+   low LLM confidence → keep keyword + show hint.
+4. Logs every decision (and every correction you make) to a JSONL feedback log so the
+   classifier learns from your taxonomy over time.
+
+### Setup
+
+```powershell
+# 1. Install Ollama (https://ollama.com), then pull the two models
+ollama pull llama3.2:3b
+ollama pull nomic-embed-text
+
+# 2. Enable LLM in your local config
+#    Add to config/routing-config.local.yaml:
+#       llm:
+#         enabled: true
+#         confidence_threshold: 0.6
+#         fewshot_k: 5
+
+# 3. (One time) Bootstrap the feedback log from your existing organized tree
+python -m ocr_router feedback bootstrap-tree `
+  --root "C:\Users\me\OneDrive\Documents"
+
+# 4. (One time) Embed all bootstrapped records into the local SQLite vector store
+python -m ocr_router feedback embed --output "C:\Users\me\OneDrive\Documents"
+
+# 5. Verify the stack is healthy
+python -m ocr_router llm doctor --output "C:\Users\me\OneDrive\Documents"
+```
+
+### Daily workflow
+
+```powershell
+# Process new downloads with the LLM advisor enabled
+python -m ocr_router process --input "...\__downloads__" --output "...\Documents" --llm
+
+# At the confirmation prompt:
+#   Enter       move ALL files
+#   1,3,5       move ONLY those numbers
+#   skip 2,4    move all EXCEPT those numbers
+#   park 7      keep those files in place permanently (never re-propose them)
+#   q           quit
+
+# Inspect what the pipeline has learned
+python -m ocr_router feedback stats   --output "...\Documents"
+python -m ocr_router feedback show    --output "...\Documents" --limit 20
+python -m ocr_router feedback search "AMEX credit card statement"
+python -m ocr_router feedback parked list
+
+# Measure accuracy against your real folder layout
+python -m ocr_router eval --root "...\Documents" --sample 200 --llm
+```
+
+### How the data layers fit together
+
+| Layer | Location | Purpose | Built by |
+|---|---|---|---|
+| Feedback log | `<output>/_feedback/corrections.jsonl` | Audit trail of every classify / skip / park / correction | `process`, `feedback bootstrap*` |
+| Embedding store | `<output>/_feedback/examples.sqlite` | Vector index of past confirmed decisions | `feedback embed` |
+| Eval audit log | `<output>/_feedback/eval-<ts>.jsonl` | Per-file accuracy record from one eval run | `eval` |
+
+All three live **next to your documents**, never inside the repo. The repo is just code.
+
+### Privacy
+
+- Document text never leaves your machine (Ollama runs locally; the codebase has no cloud
+  fallback by design).
+- The feedback log stores a configurable text excerpt per record (default 2000 chars,
+  trimmed to a single page worth of OCR). Keep it under your already-private OneDrive /
+  Documents tree.
+- The embedding store contains those same excerpts plus their 768-dim vectors — same
+  privacy posture as the log.
+
+### Rollback
+
+Three independent ways to disable the LLM stack:
+
+```powershell
+# Per-run override
+python -m ocr_router process ... --no-llm
+
+# Disable in config
+#   llm:
+#     enabled: false
+
+# Full revert to pre-L4 keyword-only baseline (preserved as a tag)
+git checkout pre-l4-baseline
+```
+
 ---
 
 ## Naming Convention
@@ -235,6 +335,17 @@ ocr-docs/
     folder_resolver.py
     manifest.py
     config.py
+    feedback/                  # L1-L3: feedback log, bootstrap, embeddings
+      log.py
+      bootstrap.py
+      store.py
+    llm/                       # L4: local LLM classifier
+      schema.py
+      backends.py
+      prompts.py
+      classifier.py
+    eval/                      # L6: accuracy harness
+      runner.py
   config/
     routing-config.example.yaml
     routing-config.yaml

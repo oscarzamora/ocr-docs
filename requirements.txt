@@ -7,3 +7,8 @@ rich==13.7.0
 pillow==10.2.0
 pngquant-cli==3.0.3
 pymupdf>=1.24.0
+
+# Optional: local LLM stack (L4). The pipeline runs fine without these — the
+# `llm` and `feedback embed/search` subcommands need them.
+ollama>=0.4.0
+numpy>=2.0.0
