@@ -1,11 +1,11 @@
 ---
 mode: agent
-description: Start an OCR Router session from SESSION_START.md with a review-first run and explicit go/no-go control.
+description: Start an OCR Router session with a self-contained review-first routine and explicit go/no-go control.
 ---
 
 # Start OCR Router session (`/start`)
 
-Use [SESSION_START.md](../../SESSION_START.md) as the canonical session template and execute the routine end-to-end.
+Run this routine end-to-end without requiring external templates.
 
 ## Behavior
 
@@ -15,8 +15,15 @@ Use [SESSION_START.md](../../SESSION_START.md) as the canonical session template
    - source folder path
    - run mode: `preview-only` or `review-then-go`
 4. Execute directly once inputs are provided:
+   - delete `C:\Users\ozamo\OneDrive\Documents\__downloads__\_ocr_tmp` if it exists
+   - run local LLM health check; if unavailable, start local backend and retry once before fallback
+   - check monthly ledgers named `YYYY.MM - PROCESSED_PDFS.md`
+   - exclude only well-formed, date-prefixed descriptive filenames already recorded in ledger
+   - treat generic names (for example `statement.pdf`, `invoice.pdf`) as ambiguous and always send through OCR/classification
    - OCR only non-OCR-ready files
+   - OCR supported images (JPEG/PNG/WebP/TIFF/BMP)
    - propose filename + destination
+   - include low-confidence files and mark them as awaiting feedback
    - wait for explicit `go` before moving files
    - learn from user corrections and re-suggest
 5. On explicit `go`:
