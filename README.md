@@ -15,6 +15,16 @@ It is designed to be configurable so each user can define their own categories, 
 - **Markdown History Log:** Optional run history output for traceability
 - **Rule Capture:** Supports adding routing rules from review feedback
 
+## LLM Support
+
+OCR Router includes an optional local-first LLM path for cases where keyword rules are not enough.
+
+- LLM is opt-in and local-only.
+- Use `--llm` to request the local Ollama-backed second opinion.
+- Use `--no-llm` to force deterministic keyword-only behavior.
+- If Ollama is unavailable, the CLI degrades gracefully to keyword-only classification.
+- Feedback examples are stored locally under `data/_feedback/` and can be used for few-shot retrieval.
+
 ---
 
 ## OCR Requirements (Windows)
