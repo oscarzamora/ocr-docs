@@ -5,6 +5,15 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $templatePath = Join-Path $repoRoot "SESSION_START.md"
 
+# Startup hygiene: remove leftover OCR temp folder from previous sessions.
+$downloadsOcrTmp = "C:\Users\ozamo\OneDrive\Documents\__downloads__\_ocr_tmp"
+if (Test-Path $downloadsOcrTmp) {
+    cmd /c "rmdir /s /q \"$downloadsOcrTmp\"" | Out-Null
+    if (-not (Test-Path $downloadsOcrTmp)) {
+        Write-Host "Removed leftover temp folder: $downloadsOcrTmp" -ForegroundColor DarkGray
+    }
+}
+
 if (-not (Test-Path $templatePath)) {
     Write-Error "SESSION_START.md not found at: $templatePath"
 }

@@ -43,6 +43,7 @@ What is already done (3 to 7 bullets):
 
 Open tasks for this session:
 - Confirm run mode and source folder to scan.
+- At session start, delete `C:\Users\ozamo\OneDrive\Documents\__downloads__\_ocr_tmp` if it exists.
 - Before OCR/classification, check monthly ledger files named YYYY.MM - PROCESSED_PDFS.md and exclude only entries with well-formed, date-prefixed descriptive names.
 - Treat generic/repeating names (for example: statement.pdf, invoice.pdf) as ambiguous and always send them through OCR/classification.
 - Include supported image files (JPEG/PNG/WebP/TIFF/BMP) in the scan and send them through OCR unless excluded by the processed-ledger rule.
@@ -53,14 +54,15 @@ Open tasks for this session:
 
 Session task flow (fixed, execute in order):
 1. Expect the user to specify a run via agent mode or a prompt to scan a source folder.
-2. Run local LLM health check; if unavailable, force-start the local LLM service and re-check before continuing.
-3. Check monthly ledger files named YYYY.MM - PROCESSED_PDFS.md and filter out only files with well-formed, date-prefixed descriptive names already listed there.
-4. Send generic/repeating names (for example: statement.pdf, invoice.pdf) through OCR/classification even if the same basename appears in ledgers.
-5. OCR PDFs only if they are not OCR-ready; OCR supported image files in all cases.
-6. Retain OCR artifacts in cache during the session.
-7. Propose naming convention and target folder, then wait for explicit go or no-go.
-8. If user provides corrections, learn from feedback and suggest improved name and destination.
-9. If go is approved, move files, append to processed Markdown history, then flush session cache.
+2. Remove `C:\Users\ozamo\OneDrive\Documents\__downloads__\_ocr_tmp` if it exists from prior sessions.
+3. Run local LLM health check; if unavailable, force-start the local LLM service and re-check before continuing.
+4. Check monthly ledger files named YYYY.MM - PROCESSED_PDFS.md and filter out only files with well-formed, date-prefixed descriptive names already listed there.
+5. Send generic/repeating names (for example: statement.pdf, invoice.pdf) through OCR/classification even if the same basename appears in ledgers.
+6. OCR PDFs only if they are not OCR-ready; OCR supported image files in all cases.
+7. Retain OCR artifacts in cache during the session.
+8. Propose naming convention and target folder, then wait for explicit go or no-go.
+9. If user provides corrections, learn from feedback and suggest improved name and destination.
+10. If go is approved, move files, append to processed Markdown history, then flush session cache.
 
 Hard constraints (must follow):
 - Local LLM should always be used by default (this machine already has local LLM installed and used in prior runs).
