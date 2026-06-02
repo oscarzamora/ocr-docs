@@ -51,6 +51,7 @@ Open tasks for this session:
 - Run review-first classification: OCR only non-OCR-ready files, then propose filename and destination.
 - Capture user corrections, re-suggest improved routing, and await explicit go or no-go.
 - On go: move files, append processed Markdown history, update statements CSV for credit card/bill items, then flush session cache and temp files.
+- On go: move files, append processed Markdown history to `YYYY.MM - PROCESSED_PDFS.md`, update statements CSV for credit card/bill items, then flush session cache and temp files.
 
 Session task flow (fixed, execute in order):
 1. Expect the user to specify a run via agent mode or a prompt to scan a source folder.
@@ -74,6 +75,7 @@ Hard constraints (must follow):
 - Include supported image files in processing and OCR them unless excluded by the processed-ledger rule.
 - For generic names (e.g., statement.pdf), apply OCR-text and YAML-driven routing with best-effort naming, then request feedback if confidence is low.
 - Keep history logs append-only.
+- Keep monthly history logs append-only using `YYYY.MM - PROCESSED_PDFS.md` naming.
 - Strip unknown route path segments instead of creating Unknown folders.
 - Do not commit sensitive artifacts (.env, manifests, OCR cache, local feedback logs).
 - Keep OCR and LLM processing local.

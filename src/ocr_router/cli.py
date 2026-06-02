@@ -678,7 +678,9 @@ def _append_history(output_dir: Path, proposals: list[Proposal], run_time: str,
         |...|...|
     """
     cfg_path = (config or {}).get('history', {}).get('path')
-    history_file = Path(cfg_path) if cfg_path else output_dir / 'PROCESSED_PDFS.md'
+    # Default to monthly append-only ledgers (e.g. 2026.06 - PROCESSED_PDFS.md).
+    monthly_name = f"{run_time[:7].replace('-', '.')} - PROCESSED_PDFS.md"
+    history_file = Path(cfg_path) if cfg_path else output_dir / monthly_name
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Parse date and time from run_time (e.g. "2026-05-17 21:30")
