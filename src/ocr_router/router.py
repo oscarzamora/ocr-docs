@@ -18,10 +18,14 @@ class DocumentRouter:
     # Classification
     # ------------------------------------------------------------------
 
-    def classify_document(self, text: str) -> Optional[str]:
+    def classify_document(self, text: str, min_score_override: Optional[int] = None) -> Optional[str]:
         """Score each category by keyword matches; return best match above threshold."""
         text_lower = text.lower()
-        min_score: int = self.config.get("min_classification_score", 2)
+        min_score: int = (
+            min_score_override
+            if min_score_override is not None
+            else self.config.get("min_classification_score", 2)
+        )
         scores: dict[str, int] = {}
         for category, keywords in self.categories.items():
             hits = sum(1 for kw in keywords if kw.lower() in text_lower)
@@ -149,10 +153,13 @@ class DocumentRouter:
             else:
                 date_part = year
 
-        # --- Smart name: Issuer + DocType ---
+        # --- Smart name: Issuer + DocType (+ owner for health docs) ---
         issuer = (metadata.get("issuer") or "").strip()
         doc_type = effective_doc_type
+        owner = (metadata.get("owner") or "").strip()
         name_parts = [p for p in [issuer, doc_type] if p]
+        if category == "Health Statements & Results" and owner:
+            name_parts.append(owner)
         smart_name = " ".join(name_parts) if name_parts else Path(filename).stem[:50]
 
         # --- Account component (only for applicable categories) ---
@@ -171,9 +178,16 @@ class DocumentRouter:
         no_amount_cats = set(self.config.get("no_amount_categories", []))
         raw_amount = metadata.get("amount")
         currency = metadata.get("currency", "$")
+        amount_source = metadata.get("amount_source")
         if raw_amount and category not in no_amount_cats:
             try:
-                amount_part = f"{currency}{float(raw_amount):.2f}"
+                amount_value = f"{currency}{float(raw_amount):.2f}"
+                if category == "Health Statements & Results" and amount_source == "last_paid":
+                    amount_part = f"Last Paid {amount_value}"
+                elif category == "Health Statements & Results" and amount_source == "due":
+                    amount_part = f"Amount Due {amount_value}"
+                else:
+                    amount_part = amount_value
             except (ValueError, TypeError):
                 pass
 

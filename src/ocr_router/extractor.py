@@ -125,6 +125,33 @@ class MetadataExtractor:
         # Strip dates that are labeled as date-of-birth before any search
         text = self._strip_dob_dates(text)
 
+        # 0. Explicit statement/billing date labels (highest confidence for statements)
+        labeled_numeric = re.search(
+            r'(?:billing date|statement date|date of statement)[\s\S]{0,400}?'
+            r'(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})',
+            text,
+            re.IGNORECASE,
+        )
+        if labeled_numeric:
+            m = int(labeled_numeric.group(1))
+            d = int(labeled_numeric.group(2))
+            y = int(labeled_numeric.group(3))
+            if 1 <= m <= 12 and 1 <= d <= 31:
+                return self._normalize_date(y, m, d)
+
+        labeled_named = re.search(
+            r'(?:billing date|statement date|date of statement)[\s\S]{0,400}?'
+            r'([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})',
+            text,
+            re.IGNORECASE,
+        )
+        if labeled_named:
+            month_num = _MONTH_NAMES.get(labeled_named.group(1).lower())
+            if month_num:
+                return self._normalize_date(
+                    int(labeled_named.group(3)), month_num, int(labeled_named.group(2))
+                )
+
         # 1. Billing period range — capture start month+day, year at end of range
         billing = re.search(
             r'(?:billing period|service period|statement period)[:\s]+'

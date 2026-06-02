@@ -1,6 +1,7 @@
 """Command-line interface for OCR Router."""
 
 import logging
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -26,6 +27,23 @@ from ocr_router.router import DocumentRouter
 logging.basicConfig(level=logging.WARNING)   # suppress info noise in interactive mode
 logger = logging.getLogger(__name__)
 console = Console()
+
+_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff', '.bmp'}
+_GENERIC_BASENAMES = {
+    'statement', 'invoice', 'bill', 'report', 'document', 'scan', 'receipt'
+}
+_WELL_FORMED_NAME_RE = re.compile(r'^(?:19|20)\d{2}\.\d{2}\.\d{2} - .+\.pdf$', re.IGNORECASE)
+_LEDGER_EXPLICIT_IGNORE_MARKERS = (
+    'skipped',
+    'do not reprocess',
+    'user declined',
+    'deleted',
+    'keep in __downloads__',
+    'kept in place',
+    'duplicate',
+    'already filed',
+    'already in destination',
+)
 
 _STATUS_ICON = {
     'exact':   '[green]📁 exact[/]',
@@ -98,47 +116,86 @@ def process(input: str, output: str, config: str, max_files: int,
             console.print(f"[yellow]⚠  PDF24 not found — proceeding text-only (--skip-ocr)[/]")
             skip_ocr = True
 
-        pdf_files = list(input_dir.rglob('*.pdf'))
-        if not pdf_files:
-            console.print("[yellow]No PDFs found.[/]")
+        input_files = [
+            p for p in input_dir.rglob('*')
+            if p.is_file()
+            and '_ocr_tmp' not in p.parts
+            and not p.name.lower().endswith('_ocr.pdf')
+            and (p.suffix.lower() == '.pdf' or p.suffix.lower() in _IMAGE_EXTENSIONS)
+        ]
+        if not input_files:
+            console.print("[yellow]No supported files found (PDF/JPEG/PNG/etc.).[/]")
             return
         if max_files:
-            pdf_files = pdf_files[:max_files]
+            input_files = input_files[:max_files]
+
+        # Exclude files already marked as processed/ignored in monthly ledgers.
+        ledgers = _load_processed_ledgers(input_dir)
+        filtered_input_files: list[Path] = []
+        ignored_by_ledger: list[tuple[Path, str, str]] = []
+        for file_path in input_files:
+            reason, ledger_name = _ledger_ignore_reason(file_path.name, ledgers)
+            if reason:
+                ignored_by_ledger.append((file_path, reason, ledger_name))
+                continue
+            filtered_input_files.append(file_path)
+        input_files = filtered_input_files
 
         # ── Phase 1: analyse every file ─────────────────────────────────────
-        console.print(f"\n[bold cyan]Analysing {len(pdf_files)} PDF(s)…[/]")
+        console.print(f"\n[bold cyan]Analysing {len(input_files)} file(s)…[/]")
         proposals: list[Proposal] = []
-        skipped_ocr: list[Path] = []
+        low_context_refs: list[int] = []
         ocr_tmp_dir = input_dir / '_ocr_tmp'
 
         with Progress(transient=True) as prog:
-            task = prog.add_task("Reading…", total=len(pdf_files))
-            for i, pdf_file in enumerate(pdf_files, 1):
+            task = prog.add_task("Reading…", total=len(input_files))
+            for pdf_file in input_files:
                 prog.update(task, advance=1)
                 issues: list[str] = []
+                is_image = pdf_file.suffix.lower() in _IMAGE_EXTENSIONS
 
                 # First attempt: extract text directly (no OCR)
-                text, confidence = PdfTextExtractor.extract_text_with_confidence(pdf_file)
+                text, confidence = ("", 0.0)
+                if not is_image:
+                    text, confidence = PdfTextExtractor.extract_text_with_confidence(pdf_file)
                 pdf_to_extract = pdf_file
 
                 # Always run ocrmypdf (OCR for scans, optimize=3 compression for all).
                 # skip_text=True ensures existing-text pages are not re-OCR'd.
-                if not skip_ocr:
+                must_ocr = is_image or (not skip_ocr)
+                if must_ocr:
                     ocr_tmp_dir.mkdir(parents=True, exist_ok=True)
                     ocr_out = ocr_tmp_dir / f"{pdf_file.stem}_ocr.pdf"
-                    ok = ocr_engine.ocr_pdf(pdf_file, ocr_out)
+                    ok = ocr_engine.ocr_pdf(
+                        pdf_file,
+                        ocr_out,
+                        optimize=1 if is_image else 3,
+                        image_dpi=300 if is_image else None,
+                    )
                     if ok and ocr_out.exists():
                         text, confidence = PdfTextExtractor.extract_text_with_confidence(ocr_out)
                         pdf_to_extract = ocr_out
                     else:
                         issues.append("OCR/compression failed")
 
-                if confidence == 0.0:
-                    skipped_ocr.append(pdf_file)
-                    continue
-
-                metadata = extractor.extract_from_text(text, pdf_file.name)
+                normalized_source_name = f"{pdf_file.stem}.pdf" if is_image else pdf_file.name
+                metadata = extractor.extract_from_text(text, normalized_source_name)
                 category = router.classify_document(text)
+                if category == 'Uncategorized' and _is_generic_basename(normalized_source_name):
+                    category = router.classify_document(text, min_score_override=1)
+                    if category != 'Uncategorized':
+                        issues.append('generic filename resolved via lenient keyword match')
+                if _is_generic_basename(normalized_source_name) and _looks_health_related(text):
+                    if category != 'Health Statements & Results':
+                        category = 'Health Statements & Results'
+                        issues.append('generic filename resolved as health using OCR health signals')
+
+                if category == 'Health Statements & Results':
+                    _enrich_health_metadata_from_text(text, metadata)
+
+                if confidence == 0.0:
+                    issues.append('insufficient OCR context; default naming/folder applied; awaiting feedback')
+
                 metadata['category'] = category
 
                 route_path = router.build_route_path(category, metadata)
@@ -147,11 +204,15 @@ def process(input: str, output: str, config: str, max_files: int,
                 if status == 'suggest':
                     issues.append(f"new folder: {dest_dir.relative_to(output_dir)}")
 
-                new_filename = router.normalize_filename(pdf_file.name, metadata)
+                new_filename = router.normalize_filename(normalized_source_name, metadata)
                 dest_file = _resolve_collision(dest_dir, new_filename)
 
+                display_index = len(proposals) + 1
+                if confidence == 0.0:
+                    low_context_refs.append(display_index)
+
                 proposals.append(Proposal(
-                    index=i,
+                    index=display_index,
                     pdf_file=pdf_file,
                     pdf_to_extract=pdf_to_extract,
                     text=text,
@@ -167,18 +228,29 @@ def process(input: str, output: str, config: str, max_files: int,
                 ))
 
         # ── Phase 2: review table ────────────────────────────────────────────
+        if ignored_by_ledger:
+            console.print(f"\n[bold yellow]Ignored by processed ledgers — {len(ignored_by_ledger)} file(s)[/]")
+            for idx, (path, reason, ledger_name) in enumerate(ignored_by_ledger, 1):
+                console.print(f"I{idx}. {path.name}  [dim]({reason}; {ledger_name})[/]")
+
         _print_proposals(proposals, output_dir)
 
-        if skipped_ocr:
-            console.print(f"\n[yellow]⚠  {len(skipped_ocr)} file(s) need OCR (skipped):[/]")
-            for f in skipped_ocr:
-                console.print(f"   {f.name}")
+        if low_context_refs:
+            refs = ', '.join(str(n) for n in low_context_refs)
+            console.print(
+                f"\n[yellow]⚠  Low-context proposals: #{refs}. "
+                "Default naming/folder applied; please provide feedback for correction.[/]"
+            )
 
         if not proposals:
+            if ocr_tmp_dir.exists():
+                shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
             console.print("[yellow]Nothing to move.[/]")
             return
 
         if dry_run:
+            if ocr_tmp_dir.exists():
+                shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
             console.print("\n[dim]--dry-run: no files moved.[/]")
             return
 
@@ -188,10 +260,14 @@ def process(input: str, output: str, config: str, max_files: int,
         if interactive:
             action_mode = _ask_action_mode()
             if action_mode is None:
+                if ocr_tmp_dir.exists():
+                    shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
                 console.print("[yellow]Aborted.[/]")
                 return
             approved_indices = _interactive_confirm(proposals, config)
             if approved_indices is None:   # user quit
+                if ocr_tmp_dir.exists():
+                    shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
                 console.print("[yellow]Aborted.[/]")
                 return
         else:
@@ -277,6 +353,90 @@ def process(input: str, output: str, config: str, max_files: int,
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+def _is_generic_basename(filename: str) -> bool:
+    base = Path(filename).stem.lower().strip()
+    return base in _GENERIC_BASENAMES
+
+
+def _looks_health_related(text: str) -> bool:
+    t = (text or '').lower()
+    health_signals = [
+        'explanation of benefits', 'eob', 'dental', 'medical', 'provider',
+        'patient', 'claim', 'benefits', 'advantage dental', 'bluecross',
+    ]
+    return any(sig in t for sig in health_signals)
+
+
+def _load_processed_ledgers(input_dir: Path) -> list[tuple[str, list[str]]]:
+    """Return [(ledger_name, lines)] from monthly processed ledgers near input folder."""
+    ledgers: list[tuple[str, list[str]]] = []
+    for p in sorted(input_dir.glob('*PROCESSED_PDFS.md')):
+        try:
+            lines = p.read_text(encoding='utf-8', errors='ignore').splitlines()
+            ledgers.append((p.name, lines))
+        except Exception:
+            continue
+    return ledgers
+
+
+def _ledger_ignore_reason(filename: str, ledgers: list[tuple[str, list[str]]]) -> tuple[Optional[str], str]:
+    """Return (reason, ledger_name) if file should be ignored by ledger policy, else (None, '')."""
+    fn_lower = filename.lower()
+    well_formed = bool(_WELL_FORMED_NAME_RE.match(filename))
+
+    for ledger_name, lines in ledgers:
+        lowered = [ln.lower() for ln in lines]
+        for i, line in enumerate(lowered):
+            if fn_lower not in line:
+                continue
+
+            # Generic/repeating names are ignored only when explicitly marked.
+            context = ' | '.join(lowered[max(0, i - 2): i + 3])
+            if any(marker in context for marker in _LEDGER_EXPLICIT_IGNORE_MARKERS):
+                return ('explicit ignore marker in ledger', ledger_name)
+
+            # Well-formed names can be considered already processed by presence in ledger.
+            if well_formed:
+                return ('already processed (well-formed filename in ledger)', ledger_name)
+
+    return (None, '')
+
+
+def _enrich_health_metadata_from_text(text: str, metadata: dict) -> None:
+    """Best-effort enrichment for health statements: owner + amount due/last paid."""
+    if not text:
+        return
+
+    if not metadata.get('owner'):
+        owner_patterns = [
+            r'\n([A-Z][a-z]+\s+[A-Z][a-z]+)\n\d{2,}\s+[^\n]+',
+            r'(?:patient name|member name|subscriber name|insured name)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})',
+            r'(?:patient|member|subscriber|insured|for)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
+            r'for\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
+        ]
+        for pattern in owner_patterns:
+            m = re.search(pattern, text)
+            if m:
+                metadata['owner'] = m.group(1).strip()
+                break
+
+    amount_patterns = [
+        ('due', r'(?:amount due|total due|balance due|full amount due)[:\s$]*([\d,]+(?:\.\d{2})?)'),
+        ('last_paid', r'(?:last paid|last payment)[:\s$]*([\d,]+(?:\.\d{2})?)'),
+        ('last_paid', r'(?:payment\s*-\s*thank\s*you|visa\s+payment|payment)\b[^\n]*?(-?[\d,]+\.\d{2})'),
+    ]
+    for source, pattern in amount_patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if not m:
+            continue
+        raw_amount = m.group(1).replace(',', '')
+        if source == 'last_paid' and raw_amount.startswith('-'):
+            raw_amount = raw_amount[1:]
+        if not metadata.get('amount'):
+            metadata['amount'] = raw_amount
+        metadata['amount_source'] = source
+        break
+
 def _print_proposals(proposals: list[Proposal], output_dir: Path) -> None:
     """Render the full review table."""
     t = Table(
@@ -315,6 +475,13 @@ def _print_proposals(proposals: list[Proposal], output_dir: Path) -> None:
         )
 
     console.print(t)
+
+    # Also print plain-text full details to avoid terminal-width truncation.
+    console.print('\n[bold]Full suggestions (untruncated text)[/]')
+    for p in proposals:
+        console.print(f"{p.index}. Original: {p.pdf_file.name}")
+        console.print(f"   Suggested name: {p.new_filename}")
+        console.print(f"   Suggested target path: {p.dest_file}")
 
 
 def _ask_action_mode() -> Optional[str]:

@@ -22,10 +22,10 @@ Working mode:
 - Keep changes minimal and focused
 - Public sharing rule: only sanitized, non-personal artifacts may go to public git
 - Private sharing rule: personal or identifying operational artifacts go only to internal-only git
-- LLM default rule: use local LLM by default on this machine; fallback only if local backend is unavailable
+- LLM default rule: use local LLM by default on this machine; if backend is down, start it and retry health before any fallback
 
 Current objective (single sentence):
-- Execute one end-to-end review-first routing cycle: scan a user-selected source folder, OCR only non-OCR-ready files, propose name and destination, learn from corrections, and on explicit go move files, append processed history, and flush session cache.
+- Execute one end-to-end review-first routing cycle: scan a user-selected source folder (PDF + supported images), OCR non-OCR-ready PDFs and all supported images, propose name and destination, learn from corrections, and on explicit go move files, append processed history, and flush session cache.
 
 Project mission (fixed):
 - Help the user find and organize previously OCR'd PDFs and JPEGs.
@@ -43,26 +43,40 @@ What is already done (3 to 7 bullets):
 
 Open tasks for this session:
 - Confirm run mode and source folder to scan.
+- Before OCR/classification, check monthly ledger files named YYYY.MM - PROCESSED_PDFS.md and exclude only entries with well-formed, date-prefixed descriptive names.
+- Treat generic/repeating names (for example: statement.pdf, invoice.pdf) as ambiguous and always send them through OCR/classification.
+- Include supported image files (JPEG/PNG/WebP/TIFF/BMP) in the scan and send them through OCR unless excluded by the processed-ledger rule.
+- Never drop low-confidence files from proposals; include them with default name/folder and mark them as awaiting feedback.
 - Run review-first classification: OCR only non-OCR-ready files, then propose filename and destination.
 - Capture user corrections, re-suggest improved routing, and await explicit go or no-go.
 - On go: move files, append processed Markdown history, update statements CSV for credit card/bill items, then flush session cache and temp files.
 
 Session task flow (fixed, execute in order):
 1. Expect the user to specify a run via agent mode or a prompt to scan a source folder.
-2. OCR documents only if they are not OCR-ready.
-3. Retain OCR artifacts in cache during the session.
-4. Propose naming convention and target folder, then wait for explicit go or no-go.
-5. If user provides corrections, learn from feedback and suggest improved name and destination.
-6. If go is approved, move files, append to processed Markdown history, then flush session cache.
+2. Run local LLM health check; if unavailable, force-start the local LLM service and re-check before continuing.
+3. Check monthly ledger files named YYYY.MM - PROCESSED_PDFS.md and filter out only files with well-formed, date-prefixed descriptive names already listed there.
+4. Send generic/repeating names (for example: statement.pdf, invoice.pdf) through OCR/classification even if the same basename appears in ledgers.
+5. OCR PDFs only if they are not OCR-ready; OCR supported image files in all cases.
+6. Retain OCR artifacts in cache during the session.
+7. Propose naming convention and target folder, then wait for explicit go or no-go.
+8. If user provides corrections, learn from feedback and suggest improved name and destination.
+9. If go is approved, move files, append to processed Markdown history, then flush session cache.
 
 Hard constraints (must follow):
 - Local LLM should always be used by default (this machine already has local LLM installed and used in prior runs).
 - --no-llm must always disable LLM classification when explicitly requested.
-- If local LLM backend is unavailable, degrade gracefully to keyword-only behavior.
+- If local LLM backend is unavailable, force-start it and retry health once before degrading to keyword-only behavior.
+- If pngquant is unavailable, keep OCR running with optimize fallback (do not fail the file).
+- Treat YYYY.MM - PROCESSED_PDFS.md ledgers as authoritative only for well-formed, date-prefixed descriptive filenames.
+- Do not treat generic/repeating basenames as processed by name alone; they must be re-evaluated through OCR/classification.
+- Include supported image files in processing and OCR them unless excluded by the processed-ledger rule.
+- For generic names (e.g., statement.pdf), apply OCR-text and YAML-driven routing with best-effort naming, then request feedback if confidence is low.
 - Keep history logs append-only.
 - Strip unknown route path segments instead of creating Unknown folders.
 - Do not commit sensitive artifacts (.env, manifests, OCR cache, local feedback logs).
 - Keep OCR and LLM processing local.
+- OCR internal data may contain personal/sensitive content.
+- OCR external/public artifacts must be fully sanitized and must never contain personal/sensitive content.
 - Public repo policy: commit only sanitized, non-personal code/docs/examples.
 - Personal or identifying operational data stays private.
 - External/public push gate: run sanitization check and only push if it passes.
