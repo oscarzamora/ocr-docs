@@ -15,13 +15,12 @@ route_templates:
   Personal: "Personal"
   Paystubs: "Paystubs/{year}"
   Receipts: "Receipts, Payment, Warranty"
-  Real Estate & HOA: "Weston Hills"
+  Real Estate & HOA: "Real Estate & HOA"
   Rental Expenses: "Rental/Rental Expenses/{year}"
 
-# Minimum keyword hitsrequired to accept a category classification (prevents false positives)
+# Minimum keyword hits required to accept a category classification.
 min_classification_score: 2
 
-# Categories that produce YYYY.MM filename (no day number)
 monthly_categories:
   - Bills
   - Credit Card Statements
@@ -30,13 +29,12 @@ monthly_categories:
   - HSA & FSA Transactions
   - Rental Expenses
 
-# Categories where account # appearsin the filename
 account_in_filename_categories:
   - Bills
   - Credit Card Statements
   - Mortgage & Home Equity Accounts
 
-# Doc type label appended to issuer in the filename smart name
+# Doc type label appended to issuer in the filename.
 doc_types:
   Bills: Monthly
   Credit Card Statements: Statement
@@ -53,102 +51,35 @@ doc_types:
   Real Estate & HOA: HOA
   Rental Expenses: Invoice
 
-# Categories where dollar amount is NOT included in filename
-# (reference documents, forms, guidelines ΓÇö no actual transaction)
+# Categories where amount is not included in the filename.
 no_amount_categories:
   - Real Estate & HOA
 
-# Known issuers:
-# Longer keys are checked first (more specific wins over shorter alias).
-# NOTE: & and - are removed during normalization (AT&TΓåÆatt, T-MobileΓåÆtmobile),
-# so keys here can use either form.
+# Generic issuer aliases for a publish-safe public example config.
+# Keep personal issuer/account mappings in config/routing-config.local.yaml.
 known_issuers:
-  # Health insurance (longer/specific keys before short abbreviations)
-  unitedhealth: UnitedHealthcare
-  united health: UnitedHealthcare
-  blue cross blue shield: BlueCross BlueShield
-  blue cross: BlueCross BlueShield
-  deltadental: Delta Dental
-  delta dental: Delta Dental
-  premera: Premera
-  cigna: Cigna
-  aetna: Aetna
-  humana: Humana
-  # HOA / Real Estate
-  weston hills community association: Weston Hills Community Association
-  boca rio homeowners: Boca Rio Homeowners Association
-  north hills: Weston Hills Community Association
-  weston hills: Weston Hills Community Association
-  # Retailers / Order confirmations (check before product brands)
-  contactsdirect: ContactsDirect
-  contacts direct: ContactsDirect
-  bhphotovideo: B&H Photo
-  bh photo: B&H Photo
-  amazon.com: Amazon
-  bestbuy: Best Buy
-  best buy: Best Buy
-  walmart: Walmart
-  costco: Costco
-  apple store: Apple Store
-  target: Target
-  # Interbank Peru AMEX cards (check before generic 'amex' and 'interbank')
-  amex centurion gold: AMEX Gold
-  amex centurion: AMEX Gold
-  interbank amex: AMEX Gold
-  # Bills - active accounts
-  florida power and light: FPL
-  florida power & light: FPL
-  nissan motor acceptance: NMAC
-  space coast credit union: Space Coast Credit Union
-  pure water pool service: Pure Water Pool Service
-  pure water pool: Pure Water Pool Service
-  midtown athletic club: Midtown Athletic Club
-  midtown athletic: Midtown Athletic Club
-  sagajon lawn: Sagajon Lawn Services
-  city of sunrise: City of Sunrise
-  t-mobile: T-Mobile
-  tmobile: T-Mobile
-  at&t: AT&T
-  att: AT&T
-  fpl: FPL
-  ionos: IONOS
-  nmac: NMAC
-  sunpass: SunPass
-  # Employers / HR / ID (for badge, identity, employment docs)
-  dtcc: DTCC
-  depository trust: DTCC
-  bank of america: Bank of America
-  capital one: Capital One
-  first citizens: First Citizens
-  bmw financial: BMW Financial
-  discover card: Discover
-  barclaycard: Barclay
-  interbank: Interbank
-  citibank: Citibank
-  barclay: Barclay
-  synchrony: Synchrony
-  fidelity: Fidelity
-  amex: AMEX
-  chase: Chase
-  citi: Citibank
-  pnc: PNC
-  macy: Macy's
-  # Banks
-  wells fargo: Wells Fargo
-  dade county federal: Dade County Federal CU
-  # Mortgage / HELOC
-  rocket mortgage: Rocket Mortgage
-  pennymac: PennyMac
-  penny mac: PennyMac
-  # Insurance
-  universal property: Universal Property
-  allstate: Allstate
-  amica: Amica
-  # Employers / Payroll processors
-  microsoft: Microsoft
-  automatic data processing: ADP
-  # Equipment / Services
-  canon: Canon
+  example bank: Example Bank
+  example checking: Example Checking
+  example savings: Example Savings
+  example card: Example Card
+  example credit card: Example Card
+  example utility: Example Utility
+  example telecom: Example Telecom
+  example mortgage: Example Mortgage
+  example insurance: Example Insurance
+  example health plan: Example Health Plan
+  example health insurer: Example Health Plan
+  example payroll: Example Payroll
+  example employer: Example Employer
+  example hoa: Example HOA
+  example retailer: Example Retailer
+  example retailer photo: Example Retailer
+  example retailer services: Example Retailer Services
+  example auto finance: Example Auto Finance
+  example auto services: Example Auto Services
+  example services: Example Services
+  example government: Example Government
+  example tax agency: Example Tax Agency
 
 categories:
   Credit Card Statements:
@@ -161,14 +92,14 @@ categories:
     - payment due date
     - credit limit
     - available credit
-    # Spanish (Peruvian / AMEX Interbank)
     - tarjeta de credito
-    - tarjeta de cr├⌐dito
+    - tarjeta de crédito
     - hoja resumen
     - estado de cuenta
     - american express
+    - line of credit
     - linea de credito
-    - l├¡nea de cr├⌐dito
+    - línea de crédito
 
   Bills:
     - amount due
@@ -275,8 +206,6 @@ categories:
     - community standards
     - hoa fees
     - structural improvements
-    - weston hills
-    - plantation
 
   Receipts:
     - order number
@@ -318,61 +247,3 @@ categories:
     - rsvp
     - ceremony
     - reception
-
-# Extraction patterns for metadata
-extraction_patterns:
-  date_formats:
-    - "%m/%d/%Y"
-    - "%m-%d-%Y"
-    - "%B %d, %Y"
-    - "%b %d, %Y"
-    - "%Y-%m-%d"
-    - "%d/%m/%Y"
-
-  # Priority-ordered labeled amount patterns (first match with a valid amount wins)
-  amount_labels:
-    - "total amount due"
-    - "amount due"
-    - "total due"
-    - "inv total"
-    - "invoice total"
-    - "new balance"
-    - "statement balance"
-    - "balance due"
-    - "payment due"
-    - "net pay"
-    # Spanish (Peruvian / Interbank AMEX)
-    - "monto a pagar"
-    - "saldo total"
-    - "pago minimo"
-    - "cuota minima"
-    - "total a pagar"
-    - "total"
-
-  amount_regex: "(?:total|amount|balance|payment)[\\s\\$]*([\\d,\\.]+)"
-  account_regex: "(?:account|account #|acct)[#\\s]*([\\d\\-]{4,})"
-
-# OCR Engine settings
-ocr_settings:
-  pdf24_path: "C:\\Program Files\\PDF24\\pdf24-Ocr.exe"
-  keepOriginal: true
-  archiveFolder: "_processed-originals"
-
-# Manifest settings
-manifest:
-  csv_path: "manifest.csv"
-  jsonl_path: "manifest.jsonl"
-  include_fields:
-    - filename
-    - category
-    - issuer
-    - owner
-    - account
-    - date
-    - amount
-    - ocr_confidence
-    - routed_to
-    - timestamp
-
-history:
-  path: "PROCESSED_PDFS.md"
