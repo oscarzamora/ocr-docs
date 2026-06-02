@@ -1,8 +1,8 @@
-Ozamo==>OwnerA
+PrimaryOwner==>OwnerA
 Giovanna==>OwnerB
 Luciana==>FamilyMemberA
 Rodrigo==>FamilyMemberB
-C:\\Users\\ozamo==>C:\\Users\\<user>
-OneDrive\\Documents==>Documents
+LOCAL_USER_PATH==>C:\\Users\\<user>
+PersonalCloud\\Documents==>Documents
 (OZ)==>(A)
 (GV)==>(B)
