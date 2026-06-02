@@ -1,0 +1,3 @@
+ozamo@example.com==>maintainers@example.com
+oscar@ozamora.com==>maintainers@example.com
+ozamora@gmail.com==>maintainers@example.com

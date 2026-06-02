@@ -1,0 +1,8 @@
+Ozamo==>OwnerA
+Giovanna==>OwnerB
+Luciana==>FamilyMemberA
+Rodrigo==>FamilyMemberB
+C:\\Users\\ozamo==>C:\\Users\\<user>
+OneDrive\\Documents==>Documents
+(OZ)==>(A)
+(GV)==>(B)
