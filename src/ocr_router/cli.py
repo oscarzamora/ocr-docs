@@ -28,6 +28,9 @@ logging.basicConfig(level=logging.WARNING)   # suppress info noise in interactiv
 logger = logging.getLogger(__name__)
 console = Console()
 
+# OCR outputs cached locally (not in OneDrive) so dry-run → go reuses them without re-OCR.
+_OCR_CACHE_DIR = Path(__file__).parents[2] / 'data' / '_ocr_cache'
+
 _IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff', '.bmp'}
 _GENERIC_BASENAMES = {
     'statement', 'invoice', 'bill', 'report', 'document', 'scan', 'receipt'
@@ -145,7 +148,8 @@ def process(input: str, output: str, config: str, max_files: int,
         console.print(f"\n[bold cyan]Analysing {len(input_files)} file(s)…[/]")
         proposals: list[Proposal] = []
         low_context_refs: list[int] = []
-        ocr_tmp_dir = input_dir / '_ocr_tmp'
+        # Cache OCR outputs locally so dry-run → go reuses them without re-running OCR.
+        ocr_tmp_dir = _OCR_CACHE_DIR
 
         with Progress(transient=True) as prog:
             task = prog.add_task("Reading…", total=len(input_files))
@@ -162,16 +166,20 @@ def process(input: str, output: str, config: str, max_files: int,
 
                 # Always run ocrmypdf (OCR for scans, optimize=3 compression for all).
                 # skip_text=True ensures existing-text pages are not re-OCR'd.
+                # If a cached OCR output already exists from a previous run, reuse it.
                 must_ocr = is_image or (not skip_ocr)
                 if must_ocr:
                     ocr_tmp_dir.mkdir(parents=True, exist_ok=True)
                     ocr_out = ocr_tmp_dir / f"{pdf_file.stem}_ocr.pdf"
-                    ok = ocr_engine.ocr_pdf(
-                        pdf_file,
-                        ocr_out,
-                        optimize=1 if is_image else 3,
-                        image_dpi=300 if is_image else None,
-                    )
+                    if ocr_out.exists():
+                        ok = True  # reuse cached OCR output — skip re-processing
+                    else:
+                        ok = ocr_engine.ocr_pdf(
+                            pdf_file,
+                            ocr_out,
+                            optimize=1 if is_image else 3,
+                            image_dpi=300 if is_image else None,
+                        )
                     if ok and ocr_out.exists():
                         text, confidence = PdfTextExtractor.extract_text_with_confidence(ocr_out)
                         pdf_to_extract = ocr_out
@@ -243,14 +251,10 @@ def process(input: str, output: str, config: str, max_files: int,
             )
 
         if not proposals:
-            if ocr_tmp_dir.exists():
-                shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
             console.print("[yellow]Nothing to move.[/]")
             return
 
         if dry_run:
-            if ocr_tmp_dir.exists():
-                shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
             console.print("\n[dim]--dry-run: no files moved.[/]")
             return
 
@@ -260,14 +264,10 @@ def process(input: str, output: str, config: str, max_files: int,
         if interactive:
             action_mode = _ask_action_mode()
             if action_mode is None:
-                if ocr_tmp_dir.exists():
-                    shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
                 console.print("[yellow]Aborted.[/]")
                 return
             approved_indices = _interactive_confirm(proposals, config)
             if approved_indices is None:   # user quit
-                if ocr_tmp_dir.exists():
-                    shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
                 console.print("[yellow]Aborted.[/]")
                 return
         else:
@@ -337,7 +337,7 @@ def process(input: str, output: str, config: str, max_files: int,
         # ── Phase 5: append to history log ───────────────────────────────────
         if moved:
             history_path = _append_history(
-                output_dir,
+                input_dir,
                 proposals=[p for p in proposals if p.index in approved_indices],
                 run_time=_now_str(),
                 action_mode=action_mode,

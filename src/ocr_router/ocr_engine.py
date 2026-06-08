@@ -109,7 +109,32 @@ class OcrEngine:
                 )
                 if image_dpi is not None:
                     kwargs['image_dpi'] = image_dpi
-                ocrmypdf.ocr(input_pdf, output_pdf, **kwargs)
+                try:
+                    ocrmypdf.ocr(input_pdf, output_pdf, **kwargs)
+                except Exception as e:
+                    # jbig2 can return exit code 3 (insufficient match) on colour/mixed
+                    # pages even when the binary passes a --version health check.
+                    # Retry once with lossless optimize=0 (no jbig2) before giving up.
+                    # Also strip jbig2 from PATH so ocrmypdf cannot probe it on retry.
+                    if effective_optimize >= 1 and 'jbig2' in str(e).lower():
+                        logger.warning(
+                            "jbig2 compression failed for %s (optimize=%s); "
+                            "retrying with optimize=0 (lossless, no jbig2)",
+                            input_pdf.name,
+                            effective_optimize,
+                        )
+                        if output_pdf.exists():
+                            output_pdf.unlink()
+                        if self._jbig2_path:
+                            jbig2_dir = str(self._jbig2_path.parent)
+                            os.environ['PATH'] = os.pathsep.join(
+                                seg for seg in os.environ['PATH'].split(os.pathsep)
+                                if seg.strip() and seg.strip() != jbig2_dir
+                            )
+                        kwargs['optimize'] = 0
+                        ocrmypdf.ocr(input_pdf, output_pdf, **kwargs)
+                    else:
+                        raise
             finally:
                 os.environ['PATH'] = orig_path
                 if orig_tessdata:
