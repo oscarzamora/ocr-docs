@@ -198,7 +198,7 @@ def process(input: str, output: str, config: str, max_files: int,
                         category = 'Health Statements & Results'
                         issues.append('generic filename resolved as health using OCR health signals')
 
-                if category == 'Health Statements & Results':
+                if category in ('Health Statements & Results', 'HSA & FSA Transactions'):
                     _enrich_health_metadata_from_text(text, metadata)
 
                 if confidence == 0.0:

@@ -18,7 +18,7 @@ Follow this sequence in every new run:
 	- source folder path
 	- run mode: `preview-only` or `review-then-go`
 4. Before OCR/classification:
-	- remove `C:\Users\ozamo\OneDrive\Documents\__downloads__\_ocr_tmp` if it exists
+	- remove the `_ocr_tmp` subfolder inside the source folder if it exists
 	- check local LLM health; if unavailable, start local backend and retry once before fallback
 	- check monthly ledgers named `YYYY.MM - PROCESSED_PDFS.md`
 	- exclude only well-formed, date-prefixed descriptive entries already in ledger
@@ -59,11 +59,11 @@ Follow this sequence in every new run:
 
 ## Routing guidance
 
-- Prefer config-driven routing and naming rules.
-- Keep owner, issuer, and category handling generic in tracked instructions.
-- Unpaid statements should remain parked when the user has not confirmed payment.
-- Tax forms should route to the tax-return area defined by config.
-- Vehicle order/spec documents should stay in staging until the purchase is closed.
+All routing and naming rules — including category-to-folder mappings, naming
+conventions, doc types, and filing edge cases — are defined in
+`config/routing-config.local.yaml`. Read the `route_templates`, `doc_types`,
+`description_from_filename_categories`, and `filing_notes` sections.
+Never hardcode routing rules here; keep them config-driven.
 
 ## Workflow
 

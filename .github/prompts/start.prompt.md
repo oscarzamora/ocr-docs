@@ -15,7 +15,7 @@ Run this routine end-to-end without requiring external templates.
    - source folder path
    - run mode: `preview-only` or `review-then-go`
 4. Execute directly once inputs are provided:
-   - delete `C:\Users\ozamo\OneDrive\Documents\__downloads__\_ocr_tmp` if it exists
+   - delete the `_ocr_tmp` subfolder inside the source folder if it exists
    - run local LLM health check; if unavailable, start local backend and retry once before fallback
    - check monthly ledgers named `YYYY.MM - PROCESSED_PDFS.md`
    - exclude only well-formed, date-prefixed descriptive filenames already recorded in ledger

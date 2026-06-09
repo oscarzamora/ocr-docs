@@ -4,6 +4,28 @@ import re
 from pathlib import Path
 from typing import Optional
 
+# Words stripped from the filename stem when extracting a "what" description.
+_STEM_STRIP_WORDS = {
+    'statement', 'invoice', 'bill', 'report', 'document', 'scan', 'receipt',
+    'rental', 'notice', 'manual', 'service', 'eob', 'paycheck', 'policy',
+    'contract', 'return', 'warranty', 'rebate', 'application', 'hoa',
+    'monthly', 'annual', 'quarterly',
+}
+
+
+def _description_from_stem(stem: str, doc_type: str = '') -> str:
+    """Extract meaningful description words from a filename stem.
+
+    Strips generic doc-type words and the doc_type itself, title-cases the rest.
+    Example: "rental filters", doc_type="Invoice" → "Filters"
+    """
+    strip = set(_STEM_STRIP_WORDS)
+    if doc_type:
+        strip.add(doc_type.lower())
+    words = re.split(r'[\s\-_]+', stem.lower())
+    kept = [w for w in words if w and w not in strip]
+    return ' '.join(w.title() for w in kept)
+
 
 class DocumentRouter:
     """Route documents to folders based on classification."""
@@ -153,12 +175,20 @@ class DocumentRouter:
             else:
                 date_part = year
 
-        # --- Smart name: Issuer + DocType (+ owner for health docs) ---
+        # --- Smart name: Issuer + Description + DocType (+ owner for health/HSA) ---
         issuer = (metadata.get("issuer") or "").strip()
         doc_type = effective_doc_type
         owner = (metadata.get("owner") or "").strip()
-        name_parts = [p for p in [issuer, doc_type] if p]
-        if category == "Health Statements & Results" and owner:
+
+        description_cats = set(self.config.get("description_from_filename_categories", []))
+        name_parts = [p for p in [issuer] if p]
+        if category in description_cats:
+            stem_desc = _description_from_stem(Path(filename).stem, doc_type)
+            if stem_desc:
+                name_parts.append(stem_desc)
+        if doc_type:
+            name_parts.append(doc_type)
+        if category in {"Health Statements & Results", "HSA & FSA Transactions"} and owner:
             name_parts.append(owner)
         smart_name = " ".join(name_parts) if name_parts else Path(filename).stem[:50]
 

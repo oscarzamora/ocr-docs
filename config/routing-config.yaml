@@ -82,6 +82,12 @@ known_issuers:
   example government: Example Government
   example tax agency: Example Tax Agency
 
+description_from_filename_categories:
+  - Rental Expenses
+  - Receipts
+  - Service
+  - Purchase, Protection & Extended Warranty
+
 categories:
   Credit Card Statements:
     - credit card

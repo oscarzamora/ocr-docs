@@ -207,7 +207,7 @@ class MetadataExtractor:
         labels = self.extraction_patterns.get('amount_labels', _DEFAULT_AMOUNT_LABELS)
         for label in labels:
             pattern = re.compile(
-                re.escape(label) + r'[:\s]*(?:\$|S/|€|£)?\s*([\d,]+(?:\.\d{1,2})?)',
+                r'\b' + re.escape(label) + r'[:\s]*(?:\$|S/|€|£)?\s*([\d,]+(?:\.\d{1,2})?)',
                 re.IGNORECASE,
             )
             m = pattern.search(text)

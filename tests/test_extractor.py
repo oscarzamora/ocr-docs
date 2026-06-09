@@ -27,7 +27,12 @@ def test_extract_amount():
     assert "1234" in result or "1,234" in result
 
 
-def test_classify_document():
+def test_amount_word_boundary_avoids_subtotal():
+    """'total' label must not match inside 'subtotal' — should skip to the real total."""
+    extractor = MetadataExtractor({})
+    text = "SUBTOTAL $12.00\nTAX $2.97\nTOTAL $14.97"
+    result = extractor._extract_amount(text)
+    assert result == "14.97"
     """Test document classification."""
     from ocr_router.router import DocumentRouter
     
