@@ -274,7 +274,8 @@ def process(input: str, output: str, config: str, max_files: int,
             approved_indices = {p.index for p in proposals}
 
         # ── Phase 4: execute approved moves ──────────────────────────────────
-        archive_dir = output_dir / "_processed-originals" if archive else None
+        # Originals are archived to the input folder (staging), not the output root.
+        archive_dir = input_dir / "_processed-originals" if archive else None
         if archive_dir and action_mode == 'move':
             archive_dir.mkdir(parents=True, exist_ok=True)
 
@@ -325,9 +326,16 @@ def process(input: str, output: str, config: str, max_files: int,
             except Exception as e:
                 console.print(f"[red]Error moving {p.pdf_file.name}: {e}[/]")
 
-        # ── Cleanup OCR temp dir ─────────────────────────────────────────────
+        # ── Cleanup OCR temp dir and originals archive ───────────────────────
         if ocr_tmp_dir.exists():
             shutil.rmtree(ocr_tmp_dir, ignore_errors=True)
+        if archive_dir and archive_dir.exists():
+            shutil.rmtree(archive_dir, ignore_errors=True)
+        # Remove any stale _processed-originals that may have landed in output_dir
+        # from older runs before this fix.
+        stale_archive = output_dir / "_processed-originals"
+        if stale_archive.exists():
+            shutil.rmtree(stale_archive, ignore_errors=True)
 
         verb = "Renamed" if action_mode == 'rename' else "Moved"
         console.print(f"\n[bold green]✓ {verb} {moved} file(s)[/]"
